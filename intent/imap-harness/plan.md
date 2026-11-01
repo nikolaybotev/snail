@@ -70,3 +70,4 @@ The phase pull request has neither `release:minor` nor `release:major`. Squash-m
 - **AC4 MODSEQ:** Assert `highestModseq` on a dedicated server via a script `after` line on `SELECT`, not via storage.
 - **AC8 redaction:** Assert `formatLogLine` with inline secrets plus session `remoteAddress` checks from live cases; imapflow auth errors do not echo the password in `err.message`.
 - **AC6 webhook `500` path:** Use injected `fetchImpl` returning `500` so attempts stay fast; the hanging HTTP case still uses a real listener with FR14 resolving the `10000` attempt budget.
+- **CI `test` job timeout:** Raised `test.yml` `timeout-minutes` from `5` to `10` so the serial harness integration file (~5m) plus `npm ci` fits; FR14 still avoids real retry and keepalive schedules.
