@@ -82,6 +82,11 @@ Files: `src/toml-subset.js`, `src/config.js`, `snail.example.toml`, `test/toml-s
 
 DoD: `npm test` exits 0.
 
+**Phase 1 departures (implemented):**
+
+- Parse-error redaction replaces only inline secret literals of at least 8 characters, so short placeholder values in tests and minimal configs do not corrupt `line N:` messages that happen to contain the same substring.
+- Invalid `name` values that fail `[A-Za-z0-9_-]+` use `line N: expected a string for name` (spec names the pattern but not a dedicated error string).
+
 ## Phase 2 — Secret resolvers
 
 Files: `src/secrets.js`, `test/secrets.test.js`
