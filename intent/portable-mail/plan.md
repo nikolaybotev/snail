@@ -146,6 +146,12 @@ Files: `src/config-reload.js`, `src/config-watch.js`, `test/config-reload.test.j
 
 DoD: `npm test` exits 0.
 
+**Phase 6 departures (implemented):**
+
+- `loadSnailConfig` accepts `{ forReload: true }` so a reload read failure logs `config io error` without appending the OS message, matching drop-box-watcher reload I/O text while startup still includes the OS message.
+- `startSupervisor` accepts `{ stopAfterSync: true }` for tests only: after the first mailbox sync it waits on a real `setTimeout` poll (not the injected sleeper) until reload or stop, so instant test sleepers do not spin the event loop. Production `snail.js` does not set this flag; account loops stay in IDLE.
+- The hung-logout acceptance check uses a fake IMAP client with `hangLogout` and polls `releaseLogout()` until the removed account runner exits after another account’s mail file is already on disk.
+
 ## Phase 7 — Service install and README
 
 Files: `snail.service`, `launchd/com.snail.agent.plist`, `scripts/run-service.sh`, `README.md`, `test/install-docs.test.js`

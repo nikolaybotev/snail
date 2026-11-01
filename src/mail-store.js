@@ -408,9 +408,14 @@ function createMailStore(options) {
     );
     const finalPath = built.absolutePath;
 
+    if (msg.beforeWrite && msg.beforeWrite() === false) {
+      return { skipped: false, saved: false, woke: false, state };
+    }
+
     try {
       fsImpl.writeFileSync(tmpPath, JSON.stringify(built.record, null, 2), { mode: 0o600 });
       fsImpl.renameSync(tmpPath, finalPath);
+      msg.onRenamed?.();
     } catch (err) {
       try {
         if (fsImpl.existsSync(tmpPath)) fsImpl.unlinkSync(tmpPath);

@@ -211,6 +211,7 @@ async function main() {
 
   await startSupervisor({
     config: loaded.config,
+    configPath,
     log,
     imapFactory: (account, password) => createImapFlowClient(account, password),
   });

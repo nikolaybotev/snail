@@ -124,7 +124,11 @@ function wrapOpenClawReconnect(client, log, accountName) {
  *   openclawWebSocketImpl?: typeof import('ws'),
  *   stopAfterSync?: boolean,
  *   stopSignal?: { stopped: boolean },
+ *   reloadState?: import('./supervisor.js').AccountReloadState,
+ *   stopAfterSync?: boolean,
+ *   globalStop?: { stopped: boolean },
  * }} ctx
+ * @returns {Promise<import('./supervisor.js').AccountLoopResult>}
  */
 async function runAccountLoop(ctx) {
   const account = ctx.account;
@@ -132,6 +136,24 @@ async function runAccountLoop(ctx) {
   const now = ctx.now ?? (() => Date.now());
   const idleKeepaliveMs = ctx.idleKeepaliveMs ?? IDLE_KEEPALIVE_MS;
   const stopSignal = ctx.stopSignal ?? { stopped: false };
+  const reloadState = ctx.reloadState ?? null;
+  const renameInProgress = { value: false };
+
+  const reloadHooks = () => ({
+    shouldAbortBeforeUid: () => {
+      if (reloadState?.pending && renameInProgress.value) {
+        return false;
+      }
+      if (stopSignal.stopped) {
+        return true;
+      }
+      if (reloadState?.pending) {
+        return true;
+      }
+      return false;
+    },
+    renameInProgress,
+  });
 
   const logSecrets = new Set();
   const log = (msg) => ctx.log(formatLogLine(account.name, msg, logSecrets));
@@ -232,9 +254,24 @@ async function runAccountLoop(ctx) {
       const mb = await imapClient.mailboxOpen(account.mailbox);
       const state = store.ensureMailboxState(mb.uidValidity, mb.uidNext);
 
-      await syncMessages(imapClient, store, state, mb.uidNext);
+      await syncMessages(imapClient, store, state, mb.uidNext, reloadHooks());
 
-      if (ctx.stopAfterSync || stopSignal.stopped) {
+      if (ctx.stopAfterSync) {
+        while (
+          !stopSignal.stopped &&
+          !ctx.globalStop?.stopped &&
+          !reloadState?.pending
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        break;
+      }
+
+      if (stopSignal.stopped) {
+        break;
+      }
+
+      if (reloadState?.pending && !renameInProgress.value) {
         break;
       }
 
@@ -262,10 +299,16 @@ async function runAccountLoop(ctx) {
           continue;
         }
         if (idleResult === 'exists') {
+          if (stopSignal.stopped) {
+            break;
+          }
           const mb2 = await imapClient.mailboxOpen(account.mailbox);
           let current = store.readState();
           if (current) {
-            await syncMessages(imapClient, store, current, mb2.uidNext);
+            await syncMessages(imapClient, store, current, mb2.uidNext, reloadHooks());
+          }
+          if (reloadState?.pending && !renameInProgress.value) {
+            break;
           }
           idleEnteredAt = now();
           continue;
@@ -291,6 +334,17 @@ async function runAccountLoop(ctx) {
   if (openclawClient) {
     openclawClient.close();
   }
+
+  if (reloadState?.pending?.kind === 'remove') {
+    reloadState.pending = null;
+    return { action: 'removed' };
+  }
+  if (reloadState?.pending?.kind === 'change') {
+    const nextAccount = reloadState.pending.account;
+    reloadState.pending = null;
+    return { action: 'changed', nextAccount };
+  }
+  return { action: 'stopped' };
 }
 
 /**
@@ -298,11 +352,18 @@ async function runAccountLoop(ctx) {
  * @param {ReturnType<typeof createMailStore>} store
  * @param {import('./mail-store.js').SnailState} state
  * @param {number} uidNext
+ * @param {{
+ *   shouldAbortBeforeUid?: () => boolean,
+ *   renameInProgress?: { value: boolean },
+ * }} [reload]
  */
-async function syncMessages(client, store, state, uidNext) {
+async function syncMessages(client, store, state, uidNext, reload) {
   let current = store.readState() ?? state;
   const uids = uidsToSync(current, uidNext);
   for (const uid of uids) {
+    if (reload?.shouldAbortBeforeUid?.()) {
+      break;
+    }
     const msg = await client.fetchOne(uid);
     if (!msg) continue;
     await store.saveOneMessage({
@@ -316,7 +377,14 @@ async function syncMessages(client, store, state, uidNext) {
       body: msg.body,
       htmlBody: msg.htmlBody,
       attachments: msg.attachments,
+      beforeWrite: () => !(reload?.shouldAbortBeforeUid?.()),
+      onRenamed: () => {
+        if (reload?.renameInProgress) reload.renameInProgress.value = true;
+      },
     });
+    if (reload?.renameInProgress) {
+      reload.renameInProgress.value = false;
+    }
     current = store.readState() ?? current;
   }
 }
@@ -374,6 +442,13 @@ async function raceIdle(client, idleKeepaliveMs, idleEnteredAt, now, sleeper, st
  *   fetchImpl?: typeof fetch,
  *   openclawWebSocketImpl?: typeof import('ws'),
  *   platform?: string,
+ *   fsFactory?: (account: import('./config.js').SnailAccount) => typeof fs,
+ *   configPath?: string,
+ *   enableReload?: boolean,
+ *   stopAfterSync?: boolean,
+ *   fsWatch?: typeof import('./config-watch.js').startConfigWatch,
+ *   rereadConfig?: typeof import('./config-reload.js').rereadSnailConfig,
+ *   decideReload?: typeof import('./config-reload.js').decideConfigReload,
  * }} options
  */
 async function startSupervisor(options) {
@@ -381,42 +456,210 @@ async function startSupervisor(options) {
     throw new Error('imapFactory is required');
   }
   const log = options.log ?? (() => {});
-  const stopSignal = { stopped: false };
-  /** @type {Promise<void>[]} */
-  const loops = [];
+  const globalStop = { stopped: false };
 
-  for (const account of options.config.accounts) {
-    const secrets =
-      options.secretResolverFactory?.(account) ??
-      createAccountSecretResolver({
-        platform: options.platform,
-        log: (line) => log(formatLogLine(account.name, line)),
-        sleeper: options.sleeper,
-      });
+  /** @type {Map<string, import('./supervisor.js').AccountRunner>} */
+  const runners = new Map();
 
-    loops.push(
-      runAccountLoop({
-        account,
-        secrets,
-        log,
-        sleeper: options.sleeper,
-        now: options.now,
-        idleKeepaliveMs: options.idleKeepaliveMs,
-        imapFactory: options.imapFactory,
-        fs: options.fsFactory?.(account),
-        fetchImpl: options.fetchImpl,
-        openclawWebSocketImpl: options.openclawWebSocketImpl,
-        stopSignal,
-      })
-    );
+  /** @type {import('./config.js').SnailConfig} */
+  let liveConfig = options.config;
+
+  /** @type {Set<string>} */
+  const knownSecrets = new Set();
+
+  function collectInlineSecrets(config) {
+    for (const acct of config.accounts) {
+      for (const field of [acct.password, acct.webhook_secret, acct.openclaw_token]) {
+        if (typeof field === 'string' && field.length > 0 && !field.startsWith('keychain://') && !field.startsWith('op://')) {
+          knownSecrets.add(field);
+        }
+      }
+    }
+  }
+  collectInlineSecrets(liveConfig);
+
+  /**
+   * @param {import('./config.js').SnailAccount} account
+   */
+  function createRunner(account) {
+    const stopSignal = { stopped: false };
+    /** @type {import('./supervisor.js').AccountReloadState} */
+    const reloadState = { pending: null };
+    const runner = {
+      account,
+      stopSignal,
+      reloadState,
+      loopPromise: null,
+      imapClient: null,
+    };
+    runners.set(account.name, runner);
+    return runner;
   }
 
-  const all = Promise.all(loops);
+  /** @type {Promise<void>[]} */
+  const loopPromises = [];
+
+  /**
+   * @param {import('./config.js').SnailAccount} account
+   */
+  function startAccountRunner(account) {
+    let runner = runners.get(account.name);
+    if (!runner) {
+      runner = createRunner(account);
+    } else {
+      runner.account = account;
+    }
+
+    const runWorker = async () => {
+      let currentAccount = account;
+      while (!globalStop.stopped) {
+        const secrets =
+          options.secretResolverFactory?.(currentAccount) ??
+          createAccountSecretResolver({
+            platform: options.platform,
+            log: (line) => log(formatLogLine(currentAccount.name, line)),
+            sleeper: options.sleeper,
+          });
+
+        runner.reloadState.pending = null;
+        runner.stopSignal.stopped = false;
+
+        const result = await runAccountLoop({
+          account: currentAccount,
+          secrets,
+          log,
+          sleeper: options.sleeper,
+          now: options.now,
+          idleKeepaliveMs: options.idleKeepaliveMs,
+          imapFactory: (acct, password) => {
+            const client = options.imapFactory(acct, password);
+            runner.imapClient = client;
+            return client;
+          },
+          fs: options.fsFactory?.(currentAccount),
+          fetchImpl: options.fetchImpl,
+          openclawWebSocketImpl: options.openclawWebSocketImpl,
+          stopSignal: runner.stopSignal,
+          reloadState: runner.reloadState,
+          stopAfterSync: options.stopAfterSync,
+          globalStop,
+        });
+
+        runner.imapClient = null;
+
+        if (result.action === 'removed') {
+          runners.delete(currentAccount.name);
+          break;
+        }
+        if (result.action === 'changed' && result.nextAccount) {
+          currentAccount = result.nextAccount;
+          runner.account = currentAccount;
+          collectInlineSecrets({
+            accounts: [currentAccount],
+            textLimit: liveConfig.textLimit,
+            htmlLimit: liveConfig.htmlLimit,
+            attachmentLimit: liveConfig.attachmentLimit,
+          });
+          continue;
+        }
+        break;
+      }
+    };
+
+    runner.loopPromise = runWorker();
+    loopPromises.push(runner.loopPromise);
+    return runner.loopPromise;
+  }
+
+  for (const account of liveConfig.accounts) {
+    startAccountRunner(account);
+  }
+
+  const rereadConfigFn = options.rereadConfig ?? require('./config-reload.js').rereadSnailConfig;
+  const decideReloadFn = options.decideReload ?? require('./config-reload.js').decideConfigReload;
+  const startWatchFn = options.fsWatch ?? require('./config-watch.js').startConfigWatch;
+
+  /** @type {ReturnType<typeof startWatchFn> | null} */
+  let watchHandle = null;
+
+  /**
+   * @param {string | null} _filename
+   */
+  function handleConfigEvent(_filename) {
+    if (globalStop.stopped || !options.configPath) return;
+    const loadResult = rereadConfigFn(options.configPath);
+    const decision = decideReloadFn(liveConfig, loadResult, knownSecrets);
+    if (decision.kind === 'keepAndLog') {
+      log(`${new Date().toISOString()} [snail] ${decision.logLine}`);
+      return;
+    }
+    if (decision.kind === 'unchanged') {
+      return;
+    }
+
+    log(`${new Date().toISOString()} [snail] config reloaded`);
+
+    liveConfig = decision.config;
+    collectInlineSecrets(liveConfig);
+
+    for (const name of decision.diff.removed) {
+      const runner = runners.get(name);
+      if (runner) {
+        runner.reloadState.pending = { kind: 'remove' };
+        runner.stopSignal.stopped = true;
+        if (typeof runner.imapClient?.cancelIdle === 'function') {
+          runner.imapClient.cancelIdle();
+        }
+      }
+    }
+    for (const { name, account: nextAccount } of decision.diff.changed) {
+      const runner = runners.get(name);
+      if (runner) {
+        runner.reloadState.pending = { kind: 'change', account: nextAccount };
+        runner.stopSignal.stopped = true;
+        if (typeof runner.imapClient?.cancelIdle === 'function') {
+          runner.imapClient.cancelIdle();
+        }
+      }
+    }
+    for (const acct of decision.diff.added) {
+      startAccountRunner(acct);
+    }
+  }
+
+  if (options.enableReload !== false && options.configPath) {
+    watchHandle = startWatchFn({
+      configPath: options.configPath,
+      onEvent: handleConfigEvent,
+      log,
+    });
+    watchHandle.reloadNow();
+  }
+
   return {
     stop() {
-      stopSignal.stopped = true;
+      globalStop.stopped = true;
+      for (const runner of runners.values()) {
+        runner.stopSignal.stopped = true;
+        if (typeof runner.imapClient?.cancelIdle === 'function') {
+          runner.imapClient.cancelIdle();
+        }
+      }
+      watchHandle?.close();
     },
-    done: all,
+    async stopAndWait() {
+      this.stop();
+      await Promise.all(loopPromises);
+    },
+    waitForDone() {
+      return Promise.all(loopPromises);
+    },
+    done: Promise.all(loopPromises),
+    reloadNow() {
+      handleConfigEvent(null);
+    },
+    getRunners: () => runners,
+    getLiveConfig: () => liveConfig,
   };
 }
 
@@ -433,7 +676,10 @@ function createFakeImapClient(options = {}) {
   const connectDelayMs = options.connectDelayMs ?? 0;
   let connectAttempts = 0;
   const hangConnect = options.hangConnect ?? false;
+  const hangLogout = options.hangLogout ?? false;
   const isStopped = options.isStopped ?? (() => false);
+  /** @type {(() => void) | null} */
+  let releaseLogout = null;
 
   return {
     id: options.id ?? 'fake-imap',
@@ -496,7 +742,19 @@ function createFakeImapClient(options = {}) {
       }
     },
     async logout() {
+      if (hangLogout) {
+        await new Promise((resolve) => {
+          releaseLogout = resolve;
+        });
+      }
       connected = false;
+    },
+    releaseLogout() {
+      if (releaseLogout) {
+        const r = releaseLogout;
+        releaseLogout = null;
+        r();
+      }
     },
     on(event, handler) {
       emitter.on(event, handler);
@@ -517,6 +775,24 @@ module.exports = {
 };
 
 /**
+ * @typedef {{ pending: null | { kind: 'remove' } | { kind: 'change', account: import('./config.js').SnailAccount } }} AccountReloadState
+ */
+
+/**
+ * @typedef {{ action: 'stopped' | 'removed' | 'changed', nextAccount?: import('./config.js').SnailAccount }} AccountLoopResult
+ */
+
+/**
+ * @typedef {{
+ *   account: import('./config.js').SnailAccount,
+ *   stopSignal: { stopped: boolean },
+ *   reloadState: AccountReloadState,
+ *   loopPromise: Promise<void> | null,
+ *   imapClient: import('./supervisor.js').SnailImapClient | null,
+ * }} AccountRunner
+ */
+
+/**
  * @typedef {{
  *   id?: string,
  *   uidValidity?: number,
@@ -525,7 +801,9 @@ module.exports = {
  *   connectDelayMs?: number,
  *   connectFailUntil?: number,
  *   hangConnect?: boolean,
+ *   hangLogout?: boolean,
  *   sleeper?: (ms: number) => Promise<void>,
+ *   isStopped?: () => boolean,
  * }} FakeImapOptions
  */
 
