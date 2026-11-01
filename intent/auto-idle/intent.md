@@ -42,7 +42,7 @@ The code change is one later merge. With neither `release:minor` nor `release:ma
 - A test stands in for production when it calls `createImapFlowClient` the way startup does: account and password, and no third-argument override of IDLE options.
 - `disableAutoIdle` is an opt-in that one specific test sets when it must hold the IDLE session still. Startup, the two-argument factory, and the config file leave it unset.
 - The proof is one short-clock harness run with auto-IDLE on: no `Socket timeout` across several quiet periods, and one live EXISTS saved. A wall-clock wait of 10 minutes is not the proof.
-- When that proof fails, the phase stops and reports. It prescribes no other timer: no replacement `maxIdleTime`, no raised `socketTimeout`, and no shortened keepalive. A failed proof does not merge.
+- A failed short-clock proof stops the phase and names no other timer workaround. A failed proof does not merge.
 - When the proof passes, `maxIdleTime` is off the production path, and the `AGENTS.md` and `REVIEW.md` sentences that require it beside `disableAutoIdle` change in that same change.
 - This pull request adds only this file. `spec.md`, `plan.md`, and code stay out. It stays unmerged. Every push to the default branch runs the release workflow. Checked 2026-11-01: `v0.1.5` is `fa91b2f`, and `scripts/release-version.sh` patch-bumps a squash merge that has neither `release:minor` nor `release:major`, so merging this pull request would publish `v0.1.6` without the client change.
 - The later phase pull request also carries neither `release:minor` nor `release:major`.
