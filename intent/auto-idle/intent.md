@@ -44,7 +44,7 @@ The code change is one later merge. With neither `release:minor` nor `release:ma
 - The proof is one short-clock harness run with auto-IDLE on: no `Socket timeout` across several quiet periods, and one live EXISTS saved. A wall-clock wait of 10 minutes is not the proof.
 - A failed short-clock proof stops the phase and names no other timer workaround. A failed proof does not merge.
 - When the proof passes, `maxIdleTime` is off the production path, and the `AGENTS.md` and `REVIEW.md` sentences that require it beside `disableAutoIdle` change in that same change.
-- This pull request adds only this file. `spec.md`, `plan.md`, and code stay out. It stays unmerged. Every push to the default branch runs the release workflow. Checked 2026-11-01: `v0.1.5` is `fa91b2f`, and `scripts/release-version.sh` patch-bumps a squash merge that has neither `release:minor` nor `release:major`, so merging this pull request would publish `v0.1.6` without the client change.
+- This pull request adds this file and [spec.md](spec.md). The plan and the code stay out. It stays unmerged. Every push to the default branch runs the release workflow. Checked 2026-11-01: `v0.1.5` is `fa91b2f`, and `scripts/release-version.sh` patch-bumps a squash merge that has neither `release:minor` nor `release:major`, so merging this pull request would publish `v0.1.6` without the client change.
 - The later phase pull request also carries neither `release:minor` nor `release:major`.
 - Placeholders only. No personal names, emails, hostnames, machine names, or real mailbox names.
 - This is a new intent. Other intent folders stay as they are.
@@ -52,9 +52,7 @@ The code change is one later merge. With neither `release:minor` nor `release:ma
 
 ## Open questions (carried into spec.md)
 
-1. Which single test, if any, must hold the IDLE session still and therefore opts into `disableAutoIdle`. The production path leaves it unset.
-2. Which short-clock lengths count as several quiet periods, and how that harness run shows one saved live EXISTS. The pass rule and the stop are already decided.
-3. What remains of the v0.1.5 harness cases that lock `maxIdleTime` and `disableAutoIdle` on the production factory. Those cases stop requiring the production path to set either option.
+None. [spec.md](spec.md) records which test opts into `disableAutoIdle` (D1), the short clock (D2), what remains of the v0.1.5 harness cases (D3), and the stop when the proof fails (D4).
 
 ## Original prompt (verbatim)
 
