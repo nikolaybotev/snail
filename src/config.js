@@ -510,7 +510,8 @@ function loadSnailConfig(configPath, options = {}) {
   try {
     stat = fs.statSync(configPath);
   } catch (err) {
-    return { ok: false, exitCode: 2, message: `config io error: ${err.message}` };
+    const ioMsg = options.forReload ? 'config io error' : `config io error: ${err.message}`;
+    return { ok: false, exitCode: 2, message: ioMsg };
   }
 
   if (!configPermissionsAcceptable(stat.mode)) {
@@ -526,7 +527,8 @@ function loadSnailConfig(configPath, options = {}) {
   try {
     text = fs.readFileSync(configPath, 'utf8');
   } catch (err) {
-    return { ok: false, exitCode: 2, message: `config io error: ${err.message}` };
+    const ioMsg = options.forReload ? 'config io error' : `config io error: ${err.message}`;
+    return { ok: false, exitCode: 2, message: ioMsg };
   }
 
   const configResult = parseSnailConfig(text);
