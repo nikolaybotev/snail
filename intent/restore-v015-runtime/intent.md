@@ -32,8 +32,8 @@ The code change is one later phase and one later merge. With neither `release:mi
 
 - The decision in Proposed outcome is closed. The phase restores the `v0.1.5` production client.
 - `intent/auto-idle/` stays the record of pull request 21. This intent does not rewrite that folder or any other intent folder.
-- This pull request adds this file and [spec.md](spec.md). The plan and the code stay out. The pull request stays open and unmerged. Checked 2026-11-01: the default branch is `v0.1.6` at `48d152e`, and `v0.1.5` is `fa91b2f`. `.github/workflows/release.yml` runs on every push to the default branch. `scripts/release-version.sh` patch-bumps a squash merge that has neither `release:minor` nor `release:major`, so merging this pull request would publish `v0.1.7` without the runtime restore.
-- The later phase pull request carries neither `release:minor` nor `release:major`. That merge publishes `v0.1.7`.
+- This pull request adds this file, [spec.md](spec.md), and [plan.md](plan.md). The one phase adds the client change here. Do not merge until that change is in it. Checked 2026-11-01: the default branch is `v0.1.6` at `48d152e`, and `v0.1.5` is `fa91b2f`. `.github/workflows/release.yml` runs on every push to the default branch. `scripts/release-version.sh` patch-bumps a squash merge that has neither `release:minor` nor `release:major`, so merging this pull request before the client change would publish `v0.1.7` without the runtime restore.
+- This pull request carries neither `release:minor` nor `release:major`. Once the client change is in it, that merge publishes `v0.1.7`.
 - No deploy.
 - Placeholders only. No personal names, emails, phone numbers, addresses, hostnames, machine names, or real mailbox names.
 - This is a new intent.

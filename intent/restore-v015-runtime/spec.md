@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Derived from | [intent.md](intent.md) (2026-11-01) |
-| Status | Draft 1 |
+| Status | Draft 2 |
 | Stage | 2 · Design |
 
 ## 1. Summary
@@ -12,7 +12,7 @@ Tag `v0.1.6` (`48d152e`, squash of pull request 21) is the default branch. Tag `
 
 On `v0.1.5` the factory sets `disableAutoIdle: true` and `maxIdleTime` to `IDLE_REFRESH_MS` (`4 * 60 * 1000`). A third argument may set `maxIdleTime` and `socketTimeout`. Startup calls the factory with account and password only. `v0.1.6` removes those options and the export. The third argument accepts `socketTimeout` only.
 
-This release puts that factory surface back to tag `v0.1.5`. The harness file that locks those options matches the tag. The `AGENTS.md` and `REVIEW.md` sentences that describe the client match the tag. `intent/auto-idle/` stays. The later phase carries neither `release:minor` nor `release:major`, and that merge publishes the next patch. This pull request stays unmerged.
+This release puts that factory surface back to tag `v0.1.5`. The harness file that locks those options matches the tag. The `AGENTS.md` and `REVIEW.md` sentences that describe the client match the tag. `intent/auto-idle/` stays. The one phase adds that restore to this pull request. The pull request carries neither `release:minor` nor `release:major`. It stays unmerged until the client change is in it. That merge publishes the next patch.
 
 ## 2. Goals and non-goals
 
@@ -31,11 +31,11 @@ This release puts that factory surface back to tag `v0.1.5`. The harness file th
 - Bumping imapflow, or editing `package.json` or the lockfile.
 - Editing `src/supervisor.js`, the service unit, or the launchd wrapper.
 - A config key, CLI flag, or documented user setting for the interval.
-- Merging this pull request.
+- Merging this pull request before the restored client is in it.
 - A `release:minor` or `release:major` label on the later phase pull request.
 - Deploy.
 
-**Release phasing.** This release is the single later phase. That phase merges the restored client and publishes the next patch. This pull request adds the intent and this spec. The plan and the code stay out. The pull request stays unmerged. Nothing in this intent is postponed. Keychain migration is a cut: it is out of scope, and it does not continue on this intent.
+**Release phasing.** This release is the single phase in [plan.md](plan.md). That phase adds the restored client to this pull request. The pull request stays unmerged until that change is in it. The squash-merge then publishes the next patch, with neither `release:minor` nor `release:major`. Nothing in this intent is postponed. Keychain migration is a cut: it is out of scope, and it does not continue on this intent.
 
 ## 3. Principles
 
@@ -76,9 +76,9 @@ A running service watches a mailbox over IMAP. On `v0.1.6` the production client
 
   The Bugs clause is `` `disableAutoIdle` without `maxIdleTime` under imapflow’s 5-minute socket timeout logging `imap disconnected: Socket timeout` about every 10 minutes ``. The apostrophe in `library’s` and `imapflow’s` is U+2019. The dash after `timeout` in the `AGENTS.md` bullet is U+2014.
 
-- FR5. **What stays.** `intent/auto-idle/` stays the text on `v0.1.6`. `src/supervisor.js` stays the two-argument `imapFactory` call. `src/secrets.js` and the keychain docs stay. No other product file changes. This intent folder is the exception: the later phase may add [plan.md](plan.md) and its build notes.
+- FR5. **What stays.** `intent/auto-idle/` stays the text on `v0.1.6`. `src/supervisor.js` stays the two-argument `imapFactory` call. `src/secrets.js` and the keychain docs stay. No other product file changes. This intent folder holds [plan.md](plan.md). The phase may add build notes there.
 
-- FR6. **Release.** The later phase pull request carries neither `release:minor` nor `release:major`. Its squash-merge to the default branch publishes the next patch. Checked 2026-11-01: `v0.1.6` is `48d152e` on the default branch, `.github/workflows/release.yml` runs on every push to that branch, and `scripts/release-version.sh` patch-bumps a squash merge that has neither label. The next patch after `v0.1.6` is `v0.1.7`. This pull request is not that merge. Merging it would publish `v0.1.7` without the restored client.
+- FR6. **Release.** This pull request carries neither `release:minor` nor `release:major`. The client change lands on this pull request before merge. Its squash-merge to the default branch publishes the next patch. Checked 2026-11-01: `v0.1.6` is `48d152e` on the default branch, `.github/workflows/release.yml` runs on every push to that branch, and `scripts/release-version.sh` patch-bumps a squash merge that has neither label. The next patch after `v0.1.6` is `v0.1.7`. Do not merge while `snail.js` still matches `v0.1.6`. Merging before the client change would publish `v0.1.7` without the restore.
 
 ## 6. Acceptance criteria
 
@@ -90,7 +90,7 @@ A running service watches a mailbox over IMAP. On `v0.1.6` the production client
 | AC4 | `npm test` exits 0. The keepalive case still passes with no fetch on that path. | `npm test` |
 | AC5 | `intent/auto-idle/`, `src/supervisor.js`, and `src/secrets.js` match `v0.1.6`. | `git diff --exit-code v0.1.6 -- intent/auto-idle src/supervisor.js src/secrets.js` |
 
-`npm test` is `node --test`. Healthy: exit 0. AC1–AC3 and AC5 run on the phase branch, whose merge base is `v0.1.6`.
+`npm test` is `node --test`. Healthy: exit 0. AC1–AC3 and AC5 run on this pull request's branch. Its merge base is `v0.1.6`.
 
 ## 7. Design decisions
 
@@ -100,7 +100,7 @@ A running service watches a mailbox over IMAP. On `v0.1.6` the production client
 
 **D3 — The handbook matches the tag in the same change.** `REVIEW.md` on `v0.1.6` treats `disableAutoIdle` or `maxIdleTime` on the production client as a bug. The restored client would fail that review. The `v0.1.5` sentences are the ones that describe the restored client. The only handbook delta in the squash is those sentences, so the files match the tag.
 
-**D4 — The later merge publishes the next patch.** Checked 2026-11-01, as FR6 records. Neither `release:minor` nor `release:major` is a patch bump. Both labels make `scripts/release-version.sh` exit non-zero. The next patch after `v0.1.6` is `v0.1.7`. This pull request stays unmerged.
+**D4 — This pull request publishes the next patch after the client is in it.** Checked 2026-11-01, as FR6 records. Neither `release:minor` nor `release:major` is a patch bump. Both labels make `scripts/release-version.sh` exit non-zero. The next patch after `v0.1.6` is `v0.1.7`. The client change lands on this pull request. The pull request stays unmerged until `snail.js` matches tag `v0.1.5`.
 
 **D5 — Keychain migration is out of scope.** `48d152e` does not change secret resolution. This release does not migrate `keychain://` references, change `src/secrets.js`, or edit the keychain docs. That work does not continue on this intent.
 
