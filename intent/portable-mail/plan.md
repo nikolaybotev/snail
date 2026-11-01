@@ -2,15 +2,15 @@
 
 | | |
 |---|---|
-| Implements | [spec.md](spec.md) Draft 2 |
-| Status | Draft 2 |
+| Implements | [spec.md](spec.md) Draft 3 |
+| Status | Draft 3 |
 | Stage | 3 · Build |
 
 Spec wins. Update this file in the same change whenever implementation departs from it.
 
 This file is the draft. Do not open build pull requests until the build gate below has been run and its findings are in the spec and the plan. Do not merge the pull request that only adds `intent/portable-mail/`.
 
-Q1 in the spec stays open. It does not block review of this plan, and it does not block the other phases. No phase chooses a first cursor.
+The first-run cursor is decided in spec D15. No phase reopens it.
 
 ## Models
 
@@ -18,15 +18,15 @@ Fresh-context review of this spec and this plan uses Grok 4.7 High. Every build 
 
 ## Stops
 
-None. Secret handling is decided in spec D7.
+None. Secret handling is D7. The first-run cursor is D15.
 
 ## Build gate
 
 1. A fresh-context review reads `spec.md` against `intent.md`. It does not edit. Model: Grok 4.7 High.
-2. Apply the findings that are right. Re-check any external fact the review disputes. Leave Q1 open.
+2. Apply the findings that are right. Re-check any external fact the review disputes.
 3. A fresh-context review reads `plan.md` against `spec.md`. It does not edit. Model: Grok 4.7 High.
 4. Apply those findings the same way.
-5. Build only after both reviews have been applied. Q1 may still be open. Phases must not pick it. One phase below is one pull request. Model: Composer 2.5.
+5. Build only after both reviews have been applied. One phase below is one pull request. Model: Composer 2.5. D15 is already decided.
 
 The draft pull request is not a build phase. Squash-merge a build phase only when its checks are green. Never use an admin override. Do not merge a docs-only pull request before the test workflow exists on that branch. Phase 0 contains the test workflow, so it is the first phase that can merge.
 
@@ -39,7 +39,7 @@ After Phase 0 and the CodeQL workflow have merged, the owner adds required statu
 | AC1 | `npm test` config-path, mode, and owner cases | 1 |
 | AC2 | `npm test` subset and schema cases | 1 |
 | AC3 | `npm test` two-account isolation case, including two gateway sockets | 5 |
-| AC4 | `npm test` catch-up and `uidValidity` cases, with a valid state file | 5 |
+| AC4 | `npm test` later-run catch-up and `uidValidity` resync | 5 |
 | AC5 | `npm test` directory lookup, including a changed envelope timestamp | 3 |
 | AC6 | `npm test` limit cases | 3 |
 | AC7 | `npm test` webhook key set, bare address, and `date` | 4 |
@@ -52,6 +52,7 @@ After Phase 0 and the CodeQL workflow have merged, the owner adds required statu
 | AC14 | `npm test` build script case | 0 |
 | AC15 | `npm test` release-version cases | 8 |
 | AC16 | `npm test` backoff sequence 5, 10, 20, 40, 60, then reset | 5 |
+| AC17 | `npm test` first-run boundary, checkpoint, stream, disk full, and a second account | 3, 5 |
 
 `npm test` is `node --test`. Healthy: exit 0. Phase 0's workflow is the CI run required by spec FR14.
 
@@ -60,7 +61,7 @@ After Phase 0 and the CodeQL workflow have merged, the owner adds required statu
 Files: `AGENTS.md`, `REVIEW.md`, `README.md`, `.github/workflows/test.yml`, `.github/workflows/codeql.yml`, `scripts/build.sh`, `package.json`, `package-lock.json`, `.gitignore`, `test/build.test.js`
 
 1. Write `AGENTS.md` from the skill template. Commands: install `npm ci`; test `npm test` (healthy: exit 0); lint none; build `bash scripts/build.sh`. Point at `intent/portable-mail/`. State that the spec wins and that a plan departure is recorded in this file in the same change.
-2. Prohibitions in `AGENTS.md`, and the Bugs and Important lines in `REVIEW.md`: sending a body to a notifier; losing or re-saving mail because a notifier failed; a secret on the command line, in a log, or in a file this program writes; loading or reloading a config that is group- or world-readable or not owned by the service user; one account blocking another; a duplicate save; skipping catch-up after downtime; a reload that reconnects an account whose parsed entry did not change; a rejected reload that drops the live config or exits; choosing Q1 inside a build phase.
+2. Prohibitions in `AGENTS.md`, and the Bugs and Important lines in `REVIEW.md`: sending a body to a notifier; waking a backlog UID or a UID from a UIDVALIDITY resync; losing or re-saving mail because a notifier failed; a secret on the command line, in a log, or in a file this program writes; loading or reloading a config that is group- or world-readable or not owned by the service user; one account blocking another, including its backlog blocking another account; a duplicate save; skipping catch-up after downtime; holding the mailbox in memory; waking a message whose file is not durable; a reload that reconnects an account whose parsed entry did not change; a rejected reload that drops the live config or exits.
 3. `REVIEW.md` uses the three passes from the skill template (Bugs, Security, Compliance). Compliance includes a missing plan-departure note.
 4. Keep `README.md` accurate for the imported single-account daemon, and point at `intent/portable-mail/`. Phase 7 replaces the install section. Do not describe live reload or the new secret rules as already shipping.
 5. Workflow `test`, job name `test`, `ubuntu-latest`, `timeout-minutes: 5`, Node 26, `npm ci`, `npm test`. It runs on pull requests and on pushes. Workflow `CodeQL`, job name `javascript`, language JavaScript, `timeout-minutes: 15`.
@@ -94,8 +95,8 @@ DoD: `npm test` exits 0.
 
 Files: `src/mail-store.js`, `test/mail-store.test.js`
 
-1. Implement section 6 and D11 and D12: create `mail_dir` if missing, atomic rename, mode `0600`, state file, directory lookup on `uidValidity` and UID, truncation, omitted attachments.
-2. Tests cover AC5 and AC6 with fixture messages, including a second save whose envelope timestamp would have produced a different file name. No network. Do not implement a missing-state policy. Callers in tests pass a cursor or an existing state file.
+1. Implement section 6, D6, D11, D12, and the state fields in D15: create `mail_dir` if missing, stream one message to a temporary file and rename it, mode `0600`, directory lookup on `uidValidity` and UID, truncation, omitted attachments. Persist `backlogUid` only after a durable backlog file. Persist `lastUid` for a new UID only after the notify outcome. Do not accumulate messages in a list.
+2. Tests cover AC5, AC6, and the store half of AC17 with fixture messages. No network. A failed write leaves `backlogUid` unchanged and does not wake. An existing file is not rewritten. A backlog UID is not woken. A new UID whose `lastUid` is still below it is woken once.
 
 DoD: `npm test` exits 0.
 
@@ -115,9 +116,9 @@ Files: `snail.js`, `src/supervisor.js`, `test/supervisor.test.js`
 
 1. `snail.js` loads `--config`, checks Node 26 (D13), and starts one loop per account. Delete the inlined process-global gateway and the ignored positional config path.
 2. Each loop resolves its own secrets once, then owns its backoff and notify retry (FR4, FR5, FR6, D6, D7). Reconnect and notify use the cache.
-3. Fake IMAP client. `idle()` fulfilling re-enters IDLE without a fetch. `exists` fetches. Close and error use the backoff. Tests cover AC3, AC4, AC9, and AC16. The isolation test uses the injected sleeper and finishes in under a second. A test asserts this process's argv is only the Node binary, the script, `--config`, and the absolute path.
-4. Config is read once at startup in this phase. Phase 6 adds reload. Do not advertise reload in the README yet.
-5. Do not choose Q1. Tests that catch up write a valid `.snail-state.json` first.
+3. Fake IMAP client that can report `UIDNEXT`, `UIDVALIDITY`, and one message at a time. `idle()` fulfilling re-enters IDLE without a fetch. `exists` fetches. Close and error use the backoff. Tests cover AC3, AC4, AC9, AC16, and AC17. The isolation test uses the injected sleeper and finishes in under a second: one account's backlog does not delay the other's save and wake. A test asserts this process's argv is only the Node binary, the script, `--config`, and the absolute path.
+4. Missing state persists `notifyBoundary` before the first body fetch. Later runs with the same `uidValidity` resume from `lastUid` and wake every UID above it. A changed `uidValidity` persists a new boundary and does not wake the resynced messages. A crash resumes from `backlogUid`. A full disk stops that account's backlog, keeps the checkpoint, and lets the other account continue.
+5. Config is read once at startup in this phase. Phase 6 adds reload. Do not advertise reload in the README yet.
 
 DoD: `npm test` exits 0.
 
@@ -137,7 +138,7 @@ DoD: `npm test` exits 0.
 Files: `snail.service`, `launchd/com.snail.agent.plist`, `scripts/run-service.sh`, `README.md`, `test/install-docs.test.js`
 
 1. Replace the system unit and the `sudo` install with D8. `Restart=on-failure` and `RestartPreventExitStatus=2`. Example plist label `com.snail.agent`, `LimitLoadToSessionType` `Aqua`, `KeepAlive` `SuccessfulExit` false. `scripts/run-service.sh` exits 0 when node exits 2. Placeholders only: `/ABS/PATH/TO/HOME`, `/ABS/PATH/TO/node`. No LaunchDaemon.
-2. Rewrite `README.md` so a stranger can copy `snail.example.toml` to `~/.config/snail/config.toml`, set mode `0600`, own it as the service user, install the user service on Linux and the LaunchAgent on macOS, and see the saved-message schema. Document live reload. Document D7 in full: Keychain on macOS via `/usr/bin/security`, `op://` ids on Linux, the 1,000-request daily limit and the about-3 versus 1 request costs, inline read-only mailbox passwords as the fallback, the token only in the `op` child's environment (`LoadCredential=` or a separate mode-`0600` file), and the same-user threat note from D7. Show `security add-generic-password` with `-w` last and no secret after it. Do not show `-w` followed by a secret, and do not show `-A`. Say the service runs while that user is logged in, and that exit 2 does not restart.
+2. Rewrite `README.md` so a stranger can copy `snail.example.toml` to `~/.config/snail/config.toml`, set mode `0600`, own it as the service user, install the user service on Linux and the LaunchAgent on macOS, and see the saved-message schema. Document live reload, and document D15: a first run and a UIDVALIDITY resync save the mailbox without waking, and a later run wakes mail that arrived during downtime. Document D7 in full: Keychain on macOS via `/usr/bin/security`, `op://` ids on Linux, the 1,000-request daily limit and the about-3 versus 1 request costs, inline read-only mailbox passwords as the fallback, the token only in the `op` child's environment (`LoadCredential=` or a separate mode-`0600` file), and the same-user threat note from D7. Show `security add-generic-password` with `-w` last and no secret after it. Do not show `-w` followed by a secret, and do not show `-A`. Say the service runs while that user is logged in, and that exit 2 does not restart.
 3. Tests cover AC13. Assert the unit and plist contain `--config`, `RestartPreventExitStatus=2` or the wrapper's exit-2 mapping, and no `sudo`, no token, and no secret literal. The example TOML may contain `REPLACE-WITH-` placeholders.
 
 DoD: `npm test` exits 0.

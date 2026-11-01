@@ -35,7 +35,7 @@ One user-level service, on Linux and on macOS, reads one config and watches many
 
 ## Open questions (carried into spec.md)
 
-1. When the state file is missing or unusable, catch-up either replays from UID 0 or starts at the mailbox high-water mark. [spec.md](spec.md) leaves both options open (Q1). It decides the TOML config (D1, D2), live reload (D4), secrets (D7), and the release artifact (D9).
+None. [spec.md](spec.md) decides the TOML config (D1, D2), live reload (D4), secrets (D7), the release artifact (D9), and the first-run cursor (D15).
 
 ## Original prompt (verbatim)
 

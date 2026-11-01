@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Derived from | [intent.md](intent.md) (2026-11-01) |
-| Status | Draft 2 |
+| Status | Draft 3 |
 | Stage | 2 · Design |
 
 ## 1. Summary
@@ -28,15 +28,14 @@ Snail is one Node.js process that watches many IMAP accounts over IDLE. Each acc
 - Replacing the imported OpenClaw handshake with a newer gateway protocol.
 - Publishing to a package registry, shipping a container image, or shipping a per-OS binary.
 - A native Keychain module, or a signed helper, in this version.
-- Choosing the first cursor when the state file is missing. That is Q1.
 
-**Release phasing.** Untagged requirements belong to the first release, including live reload. Q1 is the only open question. There is no later release in this spec.
+**Release phasing.** Untagged requirements belong to the first release, including live reload and the first-run sync in D15. There is no open question and no later release in this spec.
 
 ## 3. Principles
 
 - P1. Every wake path sends metadata only. The body, HTML, and attachment bytes never go to a notifier.
-- P2. The message file is saved, and last-seen state is advanced, before notify. A notifier failure does not delete, rewrite, or save the message again.
-- P3. One account must not stop or delay another, including during secret resolution, reconnect backoff, notify retry, and config reload.
+- P2. The message file is durable before any wake. A backlog UID is never woken. A notifier failure does not delete, rewrite, or save the message again, and it does not move a new UID backward.
+- P3. One account must not stop or delay another, including during secret resolution, reconnect backoff, notify retry, config reload, and a backlog sync.
 - P4. Snail never logs a secret, never places one on a command line, and never writes one into a file it creates. The operator's config may hold an inline secret only when that file is mode `0600` and owned by the service user.
 - P5. A rejected reload keeps the live config. The process does not exit.
 - P6. An account whose parsed config entry is unchanged is not reconnected, relogged, or re-notified by a reload.
@@ -50,6 +49,9 @@ Snail is one Node.js process that watches many IMAP accounts over IDLE. Each acc
 - One IMAP login fails. The other account still saves and notifies.
 - A webhook does not return a 2xx. One file exists for that message. A later catch-up does not write a second file.
 - An agent or a webhook receiver learns From, Subject, date, message id, path, and mailbox, then reads the JSON file itself.
+- The first time an account runs, every message already in the mailbox is saved and none of them wake the agent. Mail that arrives after that sync is saved and does wake the agent, even while older messages are still being saved.
+- After downtime, with the same mailbox generation, every message that arrived while Snail was down is saved and wakes the agent.
+- If the server renumbers the mailbox, Snail saves the messages again and does not wake the agent for that resync.
 
 ## 5. Functional requirements
 
@@ -57,9 +59,9 @@ Snail is one Node.js process that watches many IMAP accounts over IDLE. Each acc
 - FR2. The config file is TOML, parsed by the port of backup-folder's subset described in D1. Before parse, refuse the file when it is group- or world-readable (`mode & 077 != 0`) or when its owner is not the process uid (the service user). Startup exits 2 with `config permissions too open` or `config owner is not the service user`, and does not print the file. The same checks reject a reload and keep the live config. A read error at startup exits 2 with `config io error: ` plus the message. A parse error at startup exits 2 with `config parse error: ` plus the parser message. Those messages must not contain a secret (D7).
 - FR3. The file is a list of `[[account]]` tables plus optional top-level limit keys. The schema, defaults, and errors are D3. At least one account is required (`missing account`). A reload that removes the last account is a rejected reload, not an empty process.
 - FR4. Each account has its own IMAP connection, its own mail directory (absolute), its own state file, its own notifier, and its own reconnect loop. An OpenClaw account also has its own gateway socket, ready flag, queue, and pending-request map (D5). The loops start together. Secret resolution and network I/O for one account happen inside that account's loop.
-- FR5. On a successful mailbox open, the account catches up from its saved `lastUid` before entering IDLE, and it does this again after every reconnect. A changed `uidValidity` on a readable state file sets `lastUid` back to 0 so catch-up runs. What `lastUid` is when the state file is missing, empty, or not the documented object is Q1. The build does not choose it. IDLE: fetch only when the server reports new mail (`exists`). If `idle()` fulfills, or the account has been idle for 29 minutes, leave IDLE and enter it again without fetching. Close and error use FR6. The 29 minutes is the keepalive the imported README already states.
+- FR5. On a successful mailbox open, the account follows D15, then enters IDLE. Fetch a new message when the server reports `exists`. If `idle()` fulfills, or the account has been idle for 29 minutes, leave IDLE and enter it again without fetching. Close and error use FR6. The 29 minutes is the keepalive the imported README already states. A backlog download on one account does not delay another account's IDLE, save, or wake.
 - FR6. Reconnect backoff starts at 5 seconds, doubles, and caps at 60 seconds (5, 10, 20, 40, 60). It resets to 5 seconds after a successful connect. A secret-resolver failure uses this same backoff. Tests inject the sleeper and assert those numbers. The delays are per account.
-- FR7. Saving a message follows D6 and D11. `mail_dir` is created on first use if it is missing. Names are sortable and unique. A message whose `uidValidity` and UID already have a file in that directory is not written again and is not notified again. The check is a directory lookup on those two numbers, not a comparison with a freshly computed timestamp.
+- FR7. Saving a message follows D6, D11, and D15. `mail_dir` is created on first use if it is missing. Names are sortable and unique. A message whose `uidValidity` and UID already have a file in that directory is not written again. The check is a directory lookup on those two numbers, not a comparison with a freshly computed timestamp. Whether it wakes depends only on D15, not on a memory of a previous notify.
 - FR8. Bodies and attachments obey D12.
 - FR9. Notifiers obey D5. The first notify attempt is immediate. Then up to five retries wait 1s, 2s, 4s, 8s, and 16s, inside that account's loop. After that, log `notify failed`. The outcome log is `notify ok` or `notify failed` with the account name, UID, and attempt count. It does not include the payload, the secret, or the header value.
 - FR10. Live reload obeys D4.
@@ -114,7 +116,18 @@ One metadata record, used by the file and both notifiers:
 
 Wake text, absolute path, no body: `New email arrived. From: <first address or unknown> | Subject: <subject or (no subject)> | File: <absolute path>`.
 
-State file: `<mail_dir>/.snail-state.json`, mode `0600`, shape `{ "uidValidity": <number>, "lastUid": <number> }`. It is not a message file. Agents match the name pattern above. Removing an account does not delete the mail directory or the state file. Adding that name and directory again resumes a readable state file's `lastUid`. Q1 covers a missing, empty, or unreadable state file. The spec does not choose a cursor for that case.
+State file: `<mail_dir>/.snail-state.json`, mode `0600`. It is not a message file. Agents match the name pattern above. Removing an account does not delete the mail directory or the state file.
+
+```json
+{
+  "uidValidity": 42,
+  "notifyBoundary": 1000,
+  "backlogUid": 0,
+  "lastUid": 999
+}
+```
+
+`notifyBoundary` is the mailbox `UIDNEXT` persisted before any body download (D15). A UID below it is backlog. A UID at or above it is new. `backlogUid` is the last backlog UID whose file is durable. `lastUid` is the last handled UID: the resume marker for a later run. A missing, empty, or unreadable state file has no marker. That is a first run, not a guess at `lastUid`.
 
 ## 7. Acceptance criteria
 
@@ -123,8 +136,8 @@ State file: `<mail_dir>/.snail-state.json`, mode `0600`, shape `{ "uidValidity":
 | AC1 | A TOML file of two `[[account]]` entries loads; a JSON config is rejected. `--config` requires an absolute path. Mode `0644`, or an owner other than the process uid, exits 2 with `config permissions too open` or `config owner is not the service user`. The file body is absent from the output. |
 | AC2 | The subset errors in D1 match, including `line N: boolean`, `line N: dotted key`, and `line N: inline table`. Unknown keys and a relative `mail_dir` fail with `line N:` messages. |
 | AC3 | Two accounts in one process use two mail directories. A hung connect on one does not stop the other from saving. The test finishes in under a second with the injected sleeper. Two OpenClaw accounts do not share a socket. |
-| AC4 | After a saved `lastUid`, only higher UIDs are fetched. A new `uidValidity` fetches from the start and does not overwrite old files. Tests that need a cursor write a valid state file. They do not assert Q1. |
-| AC5 | A second delivery of the same UID and `uidValidity` does not write a second file and does not notify, including when the envelope timestamp differs from the first file's name. |
+| AC4 | With a saved `lastUid` and the same `uidValidity`, only higher UIDs are fetched, and each of those is saved and woken. A changed `uidValidity` saves the mailbox again under the new validity, wakes none of those messages, leaves the old files in place, and wakes a message that arrives after the new boundary. |
+| AC5 | A second pass over a UID whose file already exists does not write again, including when the envelope timestamp would have produced a different name. A backlog UID is not woken. A new UID is woken once, then `lastUid` includes it, and a later pass does not wake it again. |
 | AC6 | Over-long text and HTML are truncated and flagged. An over-size attachment stores metadata with `omitted: true` and no `content`. |
 | AC7 | The webhook JSON has only the keys in D5. A test fails if `body`, `html_body`, `date_source`, or attachment content is present. `from` is the bare first address. `date` is the file's UTC timestamp. |
 | AC8 | The OpenClaw fake server records protocol 3, payload v2, method `wake`, and the wake sentence in section 6. The path is absolute. Each account has its own connection. |
@@ -136,6 +149,7 @@ State file: `<mail_dir>/.snail-state.json`, mode `0600`, shape `{ "uidValidity":
 | AC14 | `bash scripts/build.sh` with `VERSION` set writes the tarball and `SHA256SUMS`. `--version --verbose` prints that version, the full SHA, and a `built` timestamp. |
 | AC15 | The version script prints `v0.1.0` when no semver tag exists, a patch bump by default, and the minor or major bump for one label. Both labels make it exit non-zero. |
 | AC16 | With an injected sleeper, failed connects wait 5s, 10s, 20s, 40s, then 60s, and a successful connect resets the next wait to 5s. |
+| AC17 | A missing state file persists `notifyBoundary` before any body fetch. Every UID below it is saved and not woken. A UID at or above it is saved and woken while backlog is still in progress. One message is fetched at a time. A crash resumes from `backlogUid` and does not rewrite or wake a checkpointed UID. A full disk stops that account's backlog, keeps `backlogUid`, logs the error, and does not wake the unsaved UID. The other account still saves. |
 
 ## 8. Design decisions
 
@@ -244,11 +258,23 @@ Webhook: `POST` with `Content-Type: application/json` and a UTF-8 body. Success 
 
 OpenClaw: one client per account, not one socket for the process. The imported process-global `_gatewayWs`, `_gatewayReady`, `_gatewayQueue`, and `_pendingReqs` stay the shape of each account's client and are not shared. Checked against `snail.js` on the default branch and against the public gateway docs on 2026-11-01 (`https://docs.openclaw.ai/concepts/architecture`, `https://docs.openclaw.ai/gateway/protocol/handshake`). The docs describe protocol 4 and a v3 device payload. The imported client speaks protocol 3 (`minProtocol` 3, `maxProtocol` 3), device-auth payload `v2` (`v2|deviceId|cli|cli|role|scopes|signedAt|token|nonce`), scopes `operator.read`, `operator.write`, and `operator.admin`, client id `cli`, platform `linux`, and `wake` with `{ text, mode: "now" }`. A new Ed25519 key is generated per connection. The default URL is `http://127.0.0.1:18789`, which the architecture page lists as the gateway default. The first release keeps that handshake, including `platform: linux` on macOS. That platform string was not checked against a gateway running on macOS. A handshake upgrade is out of scope.
 
-The account connects its gateway socket when that account's loop starts, and again when that socket drops. Wake uses the cached token. Notify retry is FR9. After `notify failed`, D6 still applies: `lastUid` stays advanced, and a later process start does not notify that UID again. The wake text is the sentence in section 6. No body.
+The account connects its gateway socket when that account's loop starts, and again when that socket drops. Wake uses the cached token. Notify retry is FR9. After `notify failed` for a new UID, `lastUid` advances and a later pass does not wake that UID again. A backlog UID never reaches this retry. The wake text is the sentence in section 6. No body.
 
-**D6 — Save, then notify.** Order for one new UID: if the directory lookup in section 6 finds an existing file, advance `lastUid` if needed and do not notify. Otherwise write the temp file, rename, write `.snail-state.json`, then notify. Retry does not write the file again and does not move `lastUid` backward. After the attempt budget, log `notify failed` and continue. The next process start does not notify that UID again. A crash after rename and before state save is caught by the directory lookup: no second file, no second notify. Receivers treat `account`, `mailbox`, `uid`, and `uid_validity` as the idempotency key.
+**D6 — Save, then notify.** One message at a time. Do not hold the mailbox in memory. Per-message limits are D12.
 
-The imported daemon already saves and advances `lastUid` before `wake`, and a failed wake is only logged. This decision adds in-process retry and the directory lookup. It does not rewind state. It does not choose Q1.
+If the directory lookup finds an existing file, do not write again. If the UID is backlog, do not wake, and advance `backlogUid` if the checkpoint is still behind that UID. If the UID is new and `lastUid` is still below it, wake, then set `lastUid` to it. A crash after the rename and before the checkpoint is caught by the lookup: no second file. A backlog UID is still not woken. A new UID whose `lastUid` was not persisted is still woken, because the wake decision is the persisted boundary, not a memory of an earlier attempt.
+
+For a UID that is not on disk yet: write a temporary file, rename it into place, then update state. Backlog: persist `backlogUid` only after that rename, and do not wake. New: wake only after the rename, then persist `lastUid` only after `notify ok` or `notify failed`. Do not move `lastUid` backward. Do not wake a UID whose file is not durable. If the disk is full, stop that account's backlog, leave `backlogUid` where it is, log the error with the account name, and do not wake the unsaved message. Other accounts continue. Receivers treat `account`, `mailbox`, `uid`, and `uid_validity` as the idempotency key.
+
+The imported daemon saves, advances one `lastUID`, and then wakes, including mail that was already in the mailbox. D15 replaces that for the first run and for a renumbered mailbox.
+
+**D15 — First run, later run, and a renumbered mailbox.** Decided. Closed. A missing state file does not skip the mailbox, and it does not wake the agent for mail that was already there.
+
+A first run is a missing, empty, or unreadable state file. Before any body is downloaded, read `UIDVALIDITY` and `UIDNEXT` and persist `uidValidity`, `notifyBoundary` = `UIDNEXT`, `backlogUid` = 0, and `lastUid` = `UIDNEXT - 1`. UID below `notifyBoundary` is backlog: save it, never wake. UID at or above `notifyBoundary` is new: save it and wake. Stream the backlog one UID at a time and checkpoint `backlogUid` only after that file is durable. A crash resumes at `backlogUid`. New mail is saved and woken without waiting for the backlog to finish. One account's backlog does not delay the others.
+
+A later run is a readable state file whose `uidValidity` matches the server. Resume from `lastUid`. Save and wake every UID above it. That is mail that arrived while Snail was down. An unfinished backlog (`backlogUid` still below `notifyBoundary - 1`) continues under the same boundary rules.
+
+If the server's `UIDVALIDITY` differs from the saved value, the mailbox was renumbered. Treat it as a first run: persist a new `notifyBoundary` at the new `UIDNEXT` before downloading bodies, save every message again, and do not wake for those messages. Wake only mail that arrives after that resync. The same checkpoint, crash, streaming, disk-full, and concurrent-new-mail rules apply. Old files stay on disk. Their names carry the old `uidValidity`, so the new files do not overwrite them. A renumbered mailbox must not flood the agent.
 
 **D7 — Secrets.** Decided. Three forms. A secret field is `password`, `webhook_secret`, or `openclaw_token`.
 
@@ -288,7 +314,7 @@ The workflow then builds with `VERSION` set to the tag, attaches the tarball and
 
 ## 9. Open questions
 
-Q1. When `.snail-state.json` is missing, empty, or not the documented object, the first cursor is not chosen. Option A: replay from UID 0 and notify every message already in the mailbox, which is what the imported `loadState` does. Option B: start at the mailbox high-water mark and do not notify mail that arrived before the first run. The build must not pick one. A readable state file whose `uidValidity` changed is not this question; FR5 still resets that `lastUid` to 0.
+None. The first cursor is D15. A missing state file saves the mailbox and does not wake those messages. A later run resumes from `lastUid` and wakes mail that arrived during downtime. A changed `UIDVALIDITY` is another first run, not a wake of every renumbered message.
 
 ## 10. What was checked
 
