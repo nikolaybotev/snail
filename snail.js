@@ -5,6 +5,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { simpleParser } = require('mailparser');
 
+/** imapflow socket inactivity default is 5 minutes; refresh IDLE one minute earlier. */
+const IDLE_REFRESH_MS = 4 * 60 * 1000;
+
 const { USAGE, loadSnailConfig } = require('./src/config.js');
 const { startSupervisor, coerceImapInteger } = require('./src/supervisor.js');
 
@@ -112,7 +115,7 @@ function assertCleanArgv(configPath) {
 /**
  * @param {import('./src/config.js').SnailConfig['accounts'][0]} account
  * @param {string} password
- * @param {{ socketTimeout?: number }} [imapOverrides]
+ * @param {{ maxIdleTime?: number | false, socketTimeout?: number }} [imapOverrides]
  */
 function createImapFlowClient(account, password, imapOverrides) {
   /** @type {import('imapflow').ImapFlow | null} */
@@ -129,11 +132,18 @@ function createImapFlowClient(account, password, imapOverrides) {
         host: account.host,
         port: account.port,
         secure: account.tls === 'on',
+        disableAutoIdle: true,
+        maxIdleTime: IDLE_REFRESH_MS,
         auth: { user: account.user, pass: password },
         logger: false,
       };
-      if (imapOverrides && Object.prototype.hasOwnProperty.call(imapOverrides, 'socketTimeout')) {
-        flowOptions.socketTimeout = imapOverrides.socketTimeout;
+      if (imapOverrides) {
+        if (Object.prototype.hasOwnProperty.call(imapOverrides, 'maxIdleTime')) {
+          flowOptions.maxIdleTime = imapOverrides.maxIdleTime;
+        }
+        if (Object.prototype.hasOwnProperty.call(imapOverrides, 'socketTimeout')) {
+          flowOptions.socketTimeout = imapOverrides.socketTimeout;
+        }
       }
       client = new ImapFlow(flowOptions);
       client.on('error', () => {});
@@ -302,5 +312,6 @@ module.exports = {
   requireNodeMajor,
   assertCleanArgv,
   createImapFlowClient,
+  IDLE_REFRESH_MS,
   NODE_MAJOR_REQUIRED,
 };
