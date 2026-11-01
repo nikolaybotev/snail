@@ -3,7 +3,7 @@
  * 🐌 Snail — IMAP IDLE daemon
  *
  * Monitors an IMAP mailbox via IDLE, saves new emails to disk,
- * and wakes an agent with metadata only.
+ * and wakes an OpenClaw agent with metadata only (never the body).
  *
  * Usage: node snail.js
  * Config: snail-config.json (see snail-config.example.json)
@@ -125,9 +125,10 @@ function saveEmail(mailDir, uid, envelope, bodyText, htmlBody, attachments, conf
   return filename;
 }
 
-// ─── Agent gateway WebSocket ─────────────────────────────────────────────────
+// ─── OpenClaw gateway WebSocket ──────────────────────────────────────────────
 
-// Persistent WS connection to the agent gateway
+// Persistent signed WebSocket to the OpenClaw gateway.
+// The wake payload is metadata only (From, Subject, file path).
 let _gatewayWs = null;
 let _gatewayReady = false;
 let _gatewayQueue = [];
@@ -158,6 +159,7 @@ function buildPayload({ deviceId, role, scopes, token, nonce, signedAt }) {
 }
 
 async function connectGateway(gatewayUrl, gatewayToken) {
+  // OpenClaw connect handshake: dial the gateway as WebSocket, answer connect.challenge.
   const wsUrl = gatewayUrl.replace(/^http/, 'ws');
   const keypair = await generateDeviceKeypair();
   const deviceId = keypair.deviceId;
@@ -243,7 +245,7 @@ function sendGatewayReq(method, params) {
 }
 
 async function injectEvent(gatewayUrl, gatewayToken, text) {
-  // Reconnect if needed
+  // Reconnect if needed. OpenClaw `wake` carries metadata text only, never the message body.
   if (!_gatewayReady) {
     await connectGateway(gatewayUrl, gatewayToken);
   }
@@ -308,6 +310,7 @@ async function run() {
   const config = loadConfig();
   const state  = loadState();
 
+  // Default is the OpenClaw gateway on localhost.
   const gatewayUrl   = config.gatewayUrl   || 'http://127.0.0.1:18789';
   const gatewayToken = config.gatewayToken;
   const mailSubdir   = config.mailDir      || '../mail';

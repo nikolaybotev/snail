@@ -1,5 +1,5 @@
 [Unit]
-Description=Snail 🐌 — IMAP IDLE daemon
+Description=Snail 🐌 — IMAP IDLE daemon for an OpenClaw gateway
 After=network-online.target
 Wants=network-online.target
 
