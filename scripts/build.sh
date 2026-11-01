@@ -35,7 +35,7 @@ cat >"$staging/$top/build-stamp.json" <<JSON
 }
 JSON
 
-cp package.json package-lock.json README.md LICENSE snail.js "$staging/$top/"
+cp package.json package-lock.json README.md LICENSE snail.js snail.example.toml "$staging/$top/"
 
 tar czf "dist/snail-${ver}.tar.gz" -C "$staging" "$top"
 
