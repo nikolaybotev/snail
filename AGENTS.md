@@ -17,11 +17,13 @@ Squash-merge a pull request only when every required check has succeeded. Requir
 
 - For build and build-review, load and follow the installed **build-practices** skill; do not copy its text into this repo.
 - Follow `intent/portable-mail/spec.md` and `intent/portable-mail/plan.md` when building portable mail.
+- Follow `intent/config-error-restart/spec.md` and `intent/config-error-restart/plan.md` for the user-service restart contract (launchd wrapper and systemd unit).
 
 ## Architecture
 
 - `snail.js` — current single-account daemon (JSON config beside the script).
 - `intent/portable-mail/` — portable-mail intent, spec, and phased plan (on branches that include that tree).
+- `intent/config-error-restart/` — launchd exit-2 mapping and systemd `ExecStart` for config errors without restart.
 
 ## Prohibitions
 
@@ -38,7 +40,10 @@ Do not introduce behavior that:
 - holds the mailbox in memory;
 - wakes a message whose file is not durable;
 - reconnects an account on reload when its parsed entry did not change;
-- drops the live config or exits on a rejected reload.
+- drops the live config or exits on a rejected reload;
+- lets the launchd wrapper exit 2 when snail exits 2;
+- lets a SIGTERM child leave the wrapper with a status other than 143;
+- sets systemd `ExecStart` to anything other than `/ABS/PATH/TO/node /ABS/PATH/TO/HOME/snail/snail.js --config /ABS/PATH/TO/HOME/.config/snail/config.toml`.
 
 ## Things agents get wrong
 

@@ -6,8 +6,8 @@ NODE="${1:?}"
 SNAIL="${2:?}"
 shift 2
 
-"$NODE" "$SNAIL" "$@"
-status=$?
+status=0
+"$NODE" "$SNAIL" "$@" || status=$?
 if [ "$status" -eq 2 ]; then
   exit 0
 fi

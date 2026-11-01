@@ -1,0 +1,54 @@
+# plan.md — Config-error restart
+
+| | |
+|---|---|
+| Implements | [spec.md](spec.md) Draft 3 |
+| Status | Built |
+| Stage | 3 · Build |
+
+Spec wins. Update this file in the same change whenever implementation departs from it.
+
+The docs-only pull request that added only `intent/config-error-restart/` was not merged. Phase 0 lands in one pull request with the intent folder and the fix. Checked 2026-11-01: tag `v0.1.3` is on main before this merge; a default-branch squash-merge of the build pull request publishes the next patch tag.
+
+## Stops
+
+None. The errexit capture is D1. The systemd split is D2. The executed check is D3.
+
+## Build gate
+
+1. A fresh-context review reads `spec.md` against `intent.md`. It does not edit.
+2. Apply the findings that are right. Re-check any external fact the review disputes.
+3. A fresh-context review reads `plan.md` against the spec. It does not edit.
+4. Apply those findings the same way.
+5. Build only after both reviews have been applied. The one phase below is one pull request.
+
+Squash-merge that pull request only when every required check has succeeded. Required status checks: `test`, `javascript`, and CodeQL. Do not merge while any required check is missing, pending, failed, or cancelled. Do not use an admin override.
+
+## Acceptance-criteria coverage
+
+| AC | Check | Phase |
+|---|---|---|
+| AC1 | `npm test` spawns the wrapper on stub exit 2 and on `node` `process.exit(2)` | 0 |
+| AC2 | `npm test` spawns the wrapper on stub exits 0 and 1, and expects 143 for SIGTERM | 0 |
+| AC3 | `npm test` reads the whole `ExecStart=` value from step 2. A line that still begins with `scripts/snail-service.sh` fails | 0 |
+| AC4 | `npm test` reads the plist for the wrapper, `SuccessfulExit` false, and `ThrottleInterval` 10 | 0 |
+| AC5 | `npm test` spawns the wrapper and reads the stub's stdout and stderr markers | 0 |
+
+`npm test` is `node --test`. Healthy: exit 0.
+
+## Confirmed wrapper
+
+After tag `v0.1.1`, `scripts/snail-service.sh` sets `set -euo pipefail` and then runs a plain `"$NODE" "$SNAIL" "$@"`. With `set -e`, a non-zero exit from node ends the script before `status=$?`. A config error (exit 2) therefore exits 2 instead of 0, and launchd restarts. The phase edits that file. The `ExecStart` pin in step 2 stays `/ABS/PATH/TO/node /ABS/PATH/TO/HOME/snail/snail.js --config /ABS/PATH/TO/HOME/.config/snail/config.toml`.
+
+## Phase 0 — Config-error restart
+
+Files: `scripts/snail-service.sh`, `snail.service`, `test/install-docs.test.js`, `AGENTS.md`, `REVIEW.md`
+
+1. In `scripts/snail-service.sh`, keep the shebang, the comment, `set -euo pipefail`, and the required node and snail arguments. The script on main at tag `v0.1.1` runs a plain `"$NODE" "$SNAIL" "$@"` under `set -e`, so a non-zero exit from node ends the script before `status=$?`. Replace that command and the following status read with `status=0`, then `"$NODE" "$SNAIL" "$@" || status=$?`, then exit 0 when `status` is 2, otherwise `exit "$status"`. Do not `exec` the child. Do not redirect stdout or stderr. Do not print. Do not add a flag. Do not rename the file.
+2. In `snail.service`, set `ExecStart` to `/ABS/PATH/TO/node /ABS/PATH/TO/HOME/snail/snail.js --config /ABS/PATH/TO/HOME/.config/snail/config.toml`. Leave `Type=simple`, `Restart=on-failure`, `RestartPreventExitStatus=2`, and `RestartSec=10` as they are. Leave the plist as it is.
+3. Extend `test/install-docs.test.js` so AC1–AC5 spawn `scripts/snail-service.sh` or read the unit and plist, as the spec states. The SIGTERM stub must yield wrapper status 143. The AC3 assertion is the whole `ExecStart=` value from step 2. On main at tag `v0.1.1` the unit is that same argument list with `scripts/snail-service.sh` in front, and an unanchored match of the four-argument tail succeeds on it. A line that still begins with `scripts/snail-service.sh` fails the test. The test named "service wrapper name in unit, README, and tree" asserts that the unit matches `snail-service.sh`. Replace that unit assertion with the whole `ExecStart=` value. Keep the README and tree checks that the wrapper file is `scripts/snail-service.sh` and that `scripts/run-service.sh` is absent, and keep the plist match for `snail-service.sh`. Keep the existing source match and the existing secret, `sudo`, and placeholder assertions. A source match alone must not be the only proof of the mapping.
+4. In `AGENTS.md`, point the service restart contract at `intent/config-error-restart/`. That contract replaces portable-mail D8 for the Linux main process and for clean signals. Under Prohibitions, add the behavior to avoid: the launchd wrapper exits 2 when snail exits 2; a SIGTERM child leaves the wrapper with a status other than 143; `ExecStart` is any value other than the line in step 2. In `REVIEW.md`, add those three failures to the Bugs line. Compliance uses this spec for the service restart contract, the same replacement D2 gives `AGENTS.md`. Portable mail stays the authority for everything else.
+5. Re-read `README.md`. Edit it only if a sentence would be false after steps 1 and 2. The Linux section cites `RestartPreventExitStatus=2` and says crashes and other failures restart. A clean signal is not one of those failures. The LaunchAgent section cites the wrapper mapping. Those sentences stay true.
+6. Do not edit `intent/portable-mail/`. Do not edit `.cursor/install.sh`. Do not edit skills, and do not change files outside this repo. Do not deploy.
+
+DoD: `npm test` exits 0.
