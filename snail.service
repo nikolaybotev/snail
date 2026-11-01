@@ -1,0 +1,18 @@
+[Unit]
+Description=Snail 🐌 — IMAP IDLE daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=youruser
+WorkingDirectory=/path/to/snail
+ExecStart=/usr/bin/node /path/to/snail/snail.js /path/to/snail/snail-config.json
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=snail
+
+[Install]
+WantedBy=multi-user.target

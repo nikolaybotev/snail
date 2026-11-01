@@ -1,0 +1,13 @@
+{
+  "imap": {
+    "host": "imap.example.com",
+    "port": 993,
+    "secure": true,
+    "user": "you@example.com",
+    "pass": "op://Vault/Item/field",
+    "mailbox": "INBOX"
+  },
+  "mailDir": "../mail",
+  "gatewayUrl": "http://127.0.0.1:18789",
+  "gatewayToken": "op://Vault/Item/field"
+}
