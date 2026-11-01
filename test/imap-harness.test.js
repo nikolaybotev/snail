@@ -9,7 +9,7 @@ const http = require('node:http');
 const imapkit = require('imapkit');
 const { WebSocketServer } = require('ws');
 
-const { createImapFlowClient } = require('../snail.js');
+const { createImapFlowClient, IDLE_REFRESH_MS } = require('../snail.js');
 const { ImapFlow } = require('imapflow');
 const {
   startSupervisor,
@@ -207,16 +207,64 @@ function inlineSecretResolver() {
  * @param {object} config
  * @param {(line: string) => void} [onLog]
  */
-async function runHarnessSupervisor(fr14, config, onLog = () => {}, fetchImpl) {
+async function runHarnessSupervisor(
+  fr14,
+  config,
+  onLog = () => {},
+  fetchImpl,
+  imapFactory = createImapFlowClient,
+) {
   const sup = await startSupervisor({
     config,
     log: onLog,
     sleeper: fr14.sleeper,
-    imapFactory: createImapFlowClient,
+    imapFactory,
     secretResolverFactory: inlineSecretResolver,
     fetchImpl,
   });
   return sup;
+}
+
+/**
+ * @returns {{ get options(): import('imapflow').ImapFlowOptions | null, restore: () => void }}
+ */
+function installImapFlowOptionsCapture() {
+  const imapflowMod = require('imapflow');
+  const Real = imapflowMod.ImapFlow;
+  /** @type {import('imapflow').ImapFlowOptions | null} */
+  let captured = null;
+  imapflowMod.ImapFlow = class CapturingImapFlow extends Real {
+    constructor(opts) {
+      captured = opts;
+      super(opts);
+    }
+  };
+  return {
+    get options() {
+      return captured;
+    },
+    restore() {
+      imapflowMod.ImapFlow = Real;
+    },
+  };
+}
+
+/**
+ * @param {{ direction: 'in' | 'out', data: Buffer }[]} traceEvents
+ */
+function traceClientCommandTokens(traceEvents) {
+  /** @type {('IDLE' | 'DONE' | 'NOOP')[]} */
+  const tokens = [];
+  for (const ev of traceEvents) {
+    if (ev.direction !== 'in') continue;
+    const text = ev.data.toString('utf8');
+    for (const line of text.split(/\r?\n/)) {
+      if (line === 'DONE') tokens.push('DONE');
+      else if (/\bIDLE\b/.test(line)) tokens.push('IDLE');
+      else if (/\bNOOP\b/.test(line)) tokens.push('NOOP');
+    }
+  }
+  return tokens;
 }
 
 test('AC1: first start saves existing mail without waking', serial, async () => {
@@ -771,6 +819,125 @@ test('AC8: secrets redacted in log lines; sockets stay on 127.0.0.1', serial, ()
   assert.doesNotMatch(secretLine, new RegExp(NOTIFIER_SECRET));
   for (const addr of observedRemoteAddresses) {
     assert.equal(addr, '127.0.0.1');
+  }
+});
+
+test('AC1 idle refresh: broken maxIdleTime logs Socket timeout', serial, async () => {
+  const mailDir = tempDir('snail-h-idle-br-');
+  const imap = await startHarnessServer({ plugins: HARNESS_PLUGINS_MIN });
+  /** @type {{ direction: 'in' | 'out', data: Buffer }[]} */
+  const traceEvents = [];
+  imap.server.on('trace', (ev) => {
+    traceEvents.push(ev);
+  });
+  const fr14 = createHarnessSleeper({ holdWebhookAttempt: true, holdReconnect5000: true });
+  const capture = installImapFlowOptionsCapture();
+  const lines = [];
+  const sup = await runHarnessSupervisor(
+    fr14,
+    { accounts: [baseHarnessAccount(imap.port, mailDir, { name: 'idle-broken' })] },
+    (line) => lines.push(line),
+    undefined,
+    (account, password) =>
+      createImapFlowClient(account, password, { socketTimeout: 400, maxIdleTime: false }),
+  );
+  try {
+    assert.ok(capture.options);
+    assert.equal(capture.options.maxIdleTime, false);
+    assert.equal(capture.options.socketTimeout, 400);
+    await waitFor(() => imap.control.sessions().some((s) => s.state === 'Selected'));
+    await waitFor(() => lines.some((l) => l.includes('imap disconnected: Socket timeout')), 5000);
+    const tokens = traceClientCommandTokens(traceEvents);
+    assert.equal(tokens.filter((t) => t === 'IDLE').length, 1);
+    assert.ok(tokens.includes('DONE'));
+    assert.ok(tokens.includes('NOOP'));
+    assert.ok(!tokens.slice(tokens.indexOf('NOOP') + 1).includes('IDLE'));
+  } finally {
+    capture.restore();
+    await stopHarness(sup, fr14);
+    await imap.close();
+  }
+});
+
+test('AC2 idle refresh: maxIdleTime under socketTimeout stays connected', serial, async () => {
+  const mailDir = tempDir('snail-h-idle-ok-');
+  const imap = await startHarnessServer({ plugins: HARNESS_PLUGINS_MIN });
+  /** @type {{ direction: 'in' | 'out', data: Buffer }[]} */
+  const traceEvents = [];
+  imap.server.on('trace', (ev) => {
+    traceEvents.push(ev);
+  });
+  const fr14 = createHarnessSleeper({ holdWebhookAttempt: true, holdReconnect5000: true });
+  const lines = [];
+  let posts = 0;
+  /** @type {object | null} */
+  let webhookPayload = null;
+  const hook = http.createServer((req, res) => {
+    posts += 1;
+    let body = '';
+    req.on('data', (c) => {
+      body += c;
+    });
+    req.on('end', () => {
+      webhookPayload = JSON.parse(body);
+      res.writeHead(200);
+      res.end('ok');
+    });
+  });
+  await new Promise((r) => hook.listen(0, '127.0.0.1', r));
+  const hookPort = hook.address().port;
+  const sup = await runHarnessSupervisor(
+    fr14,
+    {
+      accounts: [
+        baseHarnessAccount(imap.port, mailDir, {
+          name: 'idle-fixed',
+          webhook_url: `http://127.0.0.1:${hookPort}/hook`,
+        }),
+      ],
+    },
+    (line) => lines.push(line),
+    undefined,
+    (account, password) =>
+      createImapFlowClient(account, password, { socketTimeout: 500, maxIdleTime: 150 }),
+  );
+  await waitFor(() => imap.control.sessions().some((s) => s.state === 'Selected'));
+  await waitFor(() => traceClientCommandTokens(traceEvents).filter((t) => t === 'IDLE').length >= 2, 3000);
+  const tokens = traceClientCommandTokens(traceEvents);
+  const secondIdle = tokens.indexOf('IDLE', tokens.indexOf('IDLE') + 1);
+  assert.ok(tokens.slice(0, secondIdle).includes('DONE'));
+  await new Promise((r) => setTimeout(r, 1100));
+  assert.ok(!lines.some((l) => l.includes('Socket timeout')));
+  imap.control.addMessage('INBOX', {
+    raw: buildRawMessage({ subject: 'idle-refresh-live' }),
+  });
+  await waitFor(() => posts === 1);
+  assert.equal(posts, 1);
+  assert.ok(webhookPayload);
+  assert.ok(!('body' in webhookPayload));
+  await stopHarness(sup, fr14);
+  hook.close();
+  await imap.close();
+});
+
+test('AC3 idle refresh: production IDLE_REFRESH_MS and two-argument options', serial, async () => {
+  assert.equal(IDLE_REFRESH_MS, 240000);
+  assert.ok(IDLE_REFRESH_MS < 5 * 60 * 1000);
+  assert.ok(IDLE_REFRESH_MS < 10 * 60 * 1000);
+  const mailDir = tempDir('snail-h-idle-ac3-');
+  const imap = await startHarnessServer({ plugins: HARNESS_PLUGINS_MIN });
+  const capture = installImapFlowOptionsCapture();
+  const client = createImapFlowClient(baseHarnessAccount(imap.port, mailDir), HARNESS_PASSWORD);
+  try {
+    await client.connect();
+    assert.ok(capture.options);
+    assert.equal(capture.options.maxIdleTime, IDLE_REFRESH_MS);
+    assert.equal(capture.options.disableAutoIdle, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(capture.options, 'socketTimeout'), false);
+    await client.logout();
+  } finally {
+    capture.restore();
+    await imap.close();
   }
 });
 

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Implements | [spec.md](spec.md) Draft 2 |
-| Status | Draft 2 |
+| Status | Finished |
 | Stage | 3 · Build |
 
 Spec wins. An amendment that keeps the goals is written into the spec in the same commit, and the coverage row moves in that commit. An amendment that drops a goal is a cut. A procedure fix that does not contradict the spec is recorded in the plan only. A closed plan shows | Status | Finished | in the header table.
@@ -50,4 +50,4 @@ DoD: `npm test` exits 0.
 
 ### Build notes (Phase 1)
 
-Phase 1 has not started.
+Implemented on branch `cursor/idle-refresh-intent-3458`. `createImapFlowClient` lazy-requires `imapflow` in `connect()` so harness tests can capture constructor options without a preload runner.
