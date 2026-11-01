@@ -51,11 +51,23 @@ test('build.sh with VERSION writes tarball and SHA256SUMS', () => {
     'LICENSE',
     'snail.js',
     'snail.example.toml',
+    'snail.service',
+    'scripts/run-service.sh',
+    'launchd/com.snail.agent.plist',
     'build-stamp.json',
     'src/config.js',
   ]) {
     assert.ok(listing.includes(`${prefix}${name}`), `missing ${name}`);
   }
+
+  assert.ok(
+    !listing.some((line) => line.includes('node_modules')),
+    'tarball must not contain node_modules',
+  );
+  assert.ok(
+    !listing.some((line) => line.includes('.git')),
+    'tarball must not contain .git',
+  );
 
   const stampRaw = execFileSync(
     'tar',

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.snail.agent</string>
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/ABS/PATH/TO/HOME/snail/scripts/run-service.sh</string>
+		<string>/ABS/PATH/TO/node</string>
+		<string>/ABS/PATH/TO/HOME/snail/snail.js</string>
+		<string>--config</string>
+		<string>/ABS/PATH/TO/HOME/.config/snail/config.toml</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>StandardOutPath</key>
+	<string>/ABS/PATH/TO/HOME/.local/state/snail/log</string>
+	<key>StandardErrorPath</key>
+	<string>/ABS/PATH/TO/HOME/.local/state/snail/log</string>
+</dict>
+</plist>
