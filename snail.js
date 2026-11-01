@@ -117,6 +117,8 @@ function assertCleanArgv(configPath) {
 function createImapFlowClient(account, password) {
   /** @type {import('imapflow').ImapFlow | null} */
   let client = null;
+  /** @type {{ cleanup: () => void, reject: (err: Error) => void, cancelled: boolean } | null} */
+  let activeIdleWait = null;
 
   return {
     id: `imapflow-${account.name}`,
@@ -125,6 +127,7 @@ function createImapFlowClient(account, password) {
         host: account.host,
         port: account.port,
         secure: account.tls === 'on',
+        disableAutoIdle: true,
         auth: { user: account.user, pass: password },
         logger: false,
       });
@@ -170,23 +173,67 @@ function createImapFlowClient(account, password) {
     },
     async idle() {
       if (!client) throw new Error('not connected');
+      if (activeIdleWait) {
+        await this.cancelIdle();
+      }
       return new Promise((resolve, reject) => {
+        /** @type {{ cleanup: () => void, reject: (err: Error) => void, cancelled: boolean }} */
+        const wait = {
+          cancelled: false,
+          cleanup: () => {},
+          reject,
+        };
         const onExists = () => {
-          cleanup();
+          if (wait.cancelled) return;
+          wait.cleanup();
+          activeIdleWait = null;
           resolve();
         };
         const onClose = () => {
-          cleanup();
+          if (wait.cancelled) return;
+          wait.cleanup();
+          activeIdleWait = null;
           reject(new Error('IMAP connection closed'));
         };
-        const cleanup = () => {
+        const onError = (err) => {
+          if (wait.cancelled) return;
+          wait.cleanup();
+          activeIdleWait = null;
+          reject(err instanceof Error ? err : new Error(String(err)));
+        };
+        wait.cleanup = () => {
           client.off('exists', onExists);
           client.off('close', onClose);
+          client.off('error', onError);
         };
         client.once('exists', onExists);
         client.once('close', onClose);
-        void client.idle().catch(() => {});
+        client.once('error', onError);
+        activeIdleWait = wait;
+        client.idle().catch((err) => {
+          if (wait.cancelled) return;
+          wait.cleanup();
+          activeIdleWait = null;
+          reject(err instanceof Error ? err : new Error(String(err)));
+        });
       });
+    },
+    async cancelIdle() {
+      if (!activeIdleWait || activeIdleWait.cancelled) {
+        return;
+      }
+      activeIdleWait.cancelled = true;
+      activeIdleWait.cleanup();
+      const reject = activeIdleWait.reject;
+      activeIdleWait = null;
+      try {
+        if (client && typeof client.preCheck === 'function') {
+          await client.preCheck();
+        }
+      } catch {
+        /* ignore */
+      }
+      reject(new Error('idle cancelled'));
     },
     async logout() {
       try {
