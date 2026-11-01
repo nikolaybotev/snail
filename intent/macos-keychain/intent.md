@@ -13,7 +13,7 @@
 
 v0.1.7 already resolves a macOS mailbox password from `keychain://<service>/<account>`. The shipped resolver is the tier 3 macOS source. The mode-`0600` config value is still a supported fallback on both operating systems, and on Linux it remains the path beside `op://`.
 
-That choice is not locked. `README.md` and `snail.example.toml` still lead a reader to an inline password, and the threat paragraph treats Keychain and 1Password as one claim. `test/secrets.test.js` checks the `find-generic-password` argument list and does not check that the binary is `/usr/bin/security` or that the call is `execFile` with no shell. Nothing in the suite fails if a later change adds a native keychain module, a second secret file, a LaunchDaemon, or a documented `-w` value or `-A` flag.
+That choice is not locked. `README.md` and `snail.example.toml` still lead a reader to an inline password. The shipped threat note already says the Keychain, `op://`, and a mode-`0600` file are roughly equal against same-user malware. The next sentence gives that at-rest benefit to Keychain and 1Password together. `test/secrets.test.js` checks the `find-generic-password` argument list and does not check that the binary is `/usr/bin/security` or that the call is `execFile` with no shell. Nothing in the suite fails if a later change adds a native keychain module, a second secret file, a LaunchDaemon, or a documented `-w` value or `-A` flag.
 
 ## Proposed outcome
 
@@ -28,7 +28,7 @@ The resolver in `src/secrets.js` is already complete for this decision. Checked 
 - `launchd/com.snail.agent.plist` is a LaunchAgent with `LimitLoadToSessionType` `Aqua`. The tree has no LaunchDaemon.
 - `README.md` already shows `security add-generic-password -s snail -a personal-imap -w` and says not to put the password on the command line after `-w`. It does not show `-A`.
 
-The phase does not add a mechanism and does not rewrite that resolver. It locks the resolver and the docs with tests. Docs keep `-w` last, so the secret is typed at a prompt. They state that against same-user malware the keychain and a mode-`0600` file are roughly equal, and that the keychain's value is encryption at rest and keeping the secret out of the file and backups.
+The phase does not add a mechanism and does not rewrite that resolver. It locks the resolver and the docs with tests. Docs keep `-w` last, so the secret is typed at a prompt. They keep the shipped three-way note: against same-user malware, the Keychain, `op://`, and a mode-`0600` file are roughly equal. They correct the next sentence so the Keychain's value is encryption at rest and keeping the secret out of backups and plain files.
 
 An unattended user-GUI LaunchAgent already completed add, find, and delete through `/usr/bin/security` with no dialog and no timeout. That proof stays outside this repo. This phase does not install anything, does not create a keychain item, and does not edit a config. Those steps are done by hand, outside this repo, and only with explicit approval.
 
@@ -44,7 +44,7 @@ This pull request starts as this file. The phase content is added here before an
 - The design is closed. `keychain://<service>/<account>` resolved by `/usr/bin/security find-generic-password -s/-a/-w`, with no shell, is the tier 3 macOS source. The mode-`0600` inline value stays a supported fallback on both operating systems. Linux stays that file and `op://`.
 - No second secret file. No native keychain module. The service stays a user GUI LaunchAgent, not a LaunchDaemon.
 - Docs prefer `keychain://` on macOS. The add example puts `-w` last and does not follow it with the secret. Docs do not show `-A`.
-- Against same-user malware, the keychain and a mode-`0600` file are roughly equal. The keychain's value is encryption at rest and keeping the secret out of the file and backups.
+- Against same-user malware, the Keychain, `op://`, and a mode-`0600` file are roughly equal. The Keychain's value is encryption at rest and keeping the secret out of backups and plain files. The shipped three-way comparison stays. The next sentence, which gives that benefit to Keychain and 1Password together, is the one to correct.
 - The phase does not install software, create a keychain item, or edit anyone's config. No real secrets in the repo. Placeholders only.
 - A code change belongs in the phase only to lock the existing resolver and the docs. The resolver is already complete, so the phase is those docs and the tests that lock them and the resolver.
 - This pull request carries neither `release:minor` nor `release:major`. Checked 2026-11-01: `v0.1.7` is `50ac3f21a8ab568d813d8c5dcc93a4ed107990f5` on the default branch. `.github/workflows/release.yml` runs on every push to `main`. `scripts/release-version.sh` patch-bumps a squash merge that has neither label, so that merge publishes `v0.1.8`. Merging this file alone would publish that patch without the lock. The pull request stays open until the phase content is in it, and it is not closed.
