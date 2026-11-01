@@ -372,24 +372,31 @@ test('AC3: UIDVALIDITY change resyncs without waking', serial, async () => {
     webhook_url: `http://127.0.0.1:${hookPort}/hook`,
   });
   let sup = await runHarnessSupervisor(fr14, { accounts: [account] });
-  await waitFor(() => readSnailState(mailDir)?.lastUid === 1);
-  await stopHarness(sup, fr14);
+  try {
+    await waitFor(() => readSnailState(mailDir)?.lastUid === 1);
+  } finally {
+    await stopHarness(sup, fr14);
+  }
   const oldFiles = fs.readdirSync(mailDir).filter((f) => f.endsWith('.json') && !f.startsWith('.'));
   imap.control.resetUidValidity('INBOX', { uidvalidity: 2 });
   posts = 0;
   const fr14b = createHarnessSleeper({ holdWebhookAttempt: true });
   sup = await runHarnessSupervisor(fr14b, { accounts: [account] });
-  await waitFor(() => readSnailState(mailDir)?.uidValidity === 2, 15000);
-  assert.equal(posts, 0);
-  for (const f of oldFiles) {
-    assert.ok(fs.existsSync(path.join(mailDir, f)));
+  try {
+    await waitFor(() => readSnailState(mailDir)?.uidValidity === 2, 15000);
+    await waitFor(() => readSnailState(mailDir)?.backlogUid === 1, 15000);
+    assert.equal(posts, 0);
+    for (const f of oldFiles) {
+      assert.ok(fs.existsSync(path.join(mailDir, f)));
+    }
+    await waitFor(() => imap.control.sessions().some((s) => s.state === 'Selected'));
+    imap.control.addMessage('INBOX', { raw: buildRawMessage({ subject: 'after-uv' }) });
+    await waitFor(() => posts === 1, 15000);
+  } finally {
+    await stopHarness(sup, fr14b);
+    hook.close();
+    await imap.close();
   }
-  await waitFor(() => imap.control.sessions().some((s) => s.state === 'Selected'));
-  imap.control.addMessage('INBOX', { raw: buildRawMessage({ subject: 'after-uv' }) });
-  await waitFor(() => posts === 1, 15000);
-  await stopHarness(sup, fr14b);
-  hook.close();
-  await imap.close();
 });
 
 test('AC5: connect failures double reconnect delay then reset after success', serial, async () => {
