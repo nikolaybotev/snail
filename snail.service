@@ -1,18 +1,16 @@
 [Unit]
-Description=Snail 🐌 — IMAP IDLE daemon for an OpenClaw gateway
+Description=Snail IMAP IDLE daemon
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=youruser
-WorkingDirectory=/path/to/snail
-ExecStart=/usr/bin/node /path/to/snail/snail.js /path/to/snail/snail-config.json
-Restart=always
+ExecStart=/ABS/PATH/TO/HOME/snail/scripts/run-service.sh /ABS/PATH/TO/node /ABS/PATH/TO/HOME/snail/snail.js --config /ABS/PATH/TO/HOME/.config/snail/config.toml
+Restart=on-failure
+RestartPreventExitStatus=2
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=snail
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
