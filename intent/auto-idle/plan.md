@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Implements | [spec.md](spec.md) Draft 1 |
-| Status | Draft 1 |
+| Status | Finished |
 | Stage | 3 · Build |
 
 Spec wins. An amendment that keeps the goals is written into the spec in the same commit, and the coverage row moves in that commit. An amendment that drops a goal is a cut. A procedure fix that does not contradict the spec is recorded in the plan only. A closed plan shows | Status | Finished | in the header table.
@@ -48,4 +48,4 @@ DoD: `npm test` exits 0, and the required checks `test` and `javascript` have su
 
 ### Build notes (Phase 1)
 
-None. Phase 1 has not started.
+Phase 1 implemented 2026-11-01. FR4 short-clock proof passed locally (`npm test` AC1 auto-idle case). No plan departures.
