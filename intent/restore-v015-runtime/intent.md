@@ -21,7 +21,7 @@ On `v0.1.5`, `createImapFlowClient` sets `disableAutoIdle: true` and `maxIdleTim
 
 The running daemon matches tag `v0.1.5` again. The production client sets `disableAutoIdle: true` and `maxIdleTime` to `IDLE_REFRESH_MS`. Startup calls the factory with account and password only. `IDLE_REFRESH_MS` is exported. Tests that lock those IDLE options match the tag. The `AGENTS.md` and `REVIEW.md` sentences that describe this client match the tag in the same change.
 
-The code change is one later phase and one later merge. With neither `release:minor` nor `release:major`, the normal release flow publishes that merge as `v0.1.7`.
+The code change is the one phase on this pull request. This pull request is the publishing merge, and only after the client change is in it. With neither `release:minor` nor `release:major`, the normal release flow publishes that merge as `v0.1.7`.
 
 ## Affected users and systems
 

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Derived from | [intent.md](intent.md) (2026-11-01) |
-| Status | Draft 2 |
+| Status | Draft 3 |
 | Stage | 2 · Design |
 
 ## 1. Summary
@@ -21,7 +21,7 @@ This release puts that factory surface back to tag `v0.1.5`. The harness file th
 - G1. `createImapFlowClient` matches tag `v0.1.5`, including `IDLE_REFRESH_MS`, `disableAutoIdle`, `maxIdleTime`, the third-argument overrides, and the export.
 - G2. `test/imap-harness.test.js` matches that tag, so the tests that lock those options match it.
 - G3. The IDLE sentences in `AGENTS.md` and `REVIEW.md` match that tag.
-- G4. The later phase publishes the next patch. While `v0.1.6` is the latest semver tag, that patch is `v0.1.7`.
+- G4. This pull request publishes the next patch, and only after the client change is in it. While `v0.1.6` is the latest semver tag, that patch is `v0.1.7`.
 
 **Non-goals**
 
@@ -32,7 +32,7 @@ This release puts that factory surface back to tag `v0.1.5`. The harness file th
 - Editing `src/supervisor.js`, the service unit, or the launchd wrapper.
 - A config key, CLI flag, or documented user setting for the interval.
 - Merging this pull request before the restored client is in it.
-- A `release:minor` or `release:major` label on the later phase pull request.
+- A `release:minor` or `release:major` label on this pull request.
 - Deploy.
 
 **Release phasing.** This release is the single phase in [plan.md](plan.md). That phase adds the restored client to this pull request. The pull request stays unmerged until that change is in it. The squash-merge then publishes the next patch, with neither `release:minor` nor `release:major`. Nothing in this intent is postponed. Keychain migration is a cut: it is out of scope, and it does not continue on this intent.
@@ -42,7 +42,7 @@ This release puts that factory surface back to tag `v0.1.5`. The harness file th
 - P1. Runtime behavior is the `v0.1.5` `createImapFlowClient` surface.
 - P2. The squash `48d152e` has one runtime change, and this release undoes that change.
 - P3. Tests that lock the IDLE options match the tag. The handbook sentences match the tag in the same change.
-- P4. The later phase publishes the next patch, with neither `release:minor` nor `release:major`.
+- P4. This pull request publishes the next patch, with neither `release:minor` nor `release:major`, and only after the client change is in it.
 - P5. Placeholders only. No personal names, emails, phone numbers, addresses, hostnames, machine names, or real mailbox names.
 
 ## 4. Users and scenarios

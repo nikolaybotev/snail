@@ -2,13 +2,13 @@
 
 | | |
 |---|---|
-| Implements | [spec.md](spec.md) Draft 2 |
+| Implements | [spec.md](spec.md) Draft 3 |
 | Status | Draft 1 |
 | Stage | 3 · Build |
 
 Spec wins. An amendment that keeps the goals is written into the spec in the same commit, and the coverage row moves in that commit. An amendment that drops a goal is a cut. A procedure fix that does not contradict the spec is recorded in the plan only. A closed plan shows | Status | Finished | in the header table.
 
-Draft 2 moves the publishing merge onto this pull request. The goals are unchanged, so the coverage rows stay on Phase 1.
+This pull request is the publishing merge, and only after the client change is in it. G4 names that same merge. The coverage rows stay on Phase 1.
 
 This file is the plan. It does not restore the client. Do not merge this pull request until `snail.js` matches tag `v0.1.5` (`fa91b2f`). Merging before that publishes `v0.1.7` without the restore (D4).
 
@@ -20,7 +20,7 @@ Keychain migration is closed. `48d152e` does not change secret resolution, and t
 
 ## Build gate
 
-The spec review passed at `0e21f627601a823ae31f07b2d220c1e1e2b94144`. Draft 2 records that this pull request is the publishing merge once the client change is in it.
+The spec review passed at `0e21f627601a823ae31f07b2d220c1e1e2b94144`. Draft 3 names this pull request as the publishing merge, and only after the client change is in it.
 
 1. A fresh-context review reads this plan against [spec.md](spec.md) Draft 2. It does not edit.
 2. Apply the findings that are right. Re-check any external fact the review disputes.
