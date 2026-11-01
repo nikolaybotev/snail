@@ -454,11 +454,19 @@ async function raceIdle(client, idleKeepaliveMs, idleEnteredAt, now, sleeper, st
     }, 5);
   });
   try {
+    let result;
     if (remaining === 0) {
-      return await Promise.race([stopPromise, Promise.resolve('keepalive')]);
+      result = await Promise.race([stopPromise, Promise.resolve('keepalive')]);
+    } else {
+      const timerPromise = sleeper(remaining).then(() => 'keepalive');
+      result = await Promise.race([idlePromise, timerPromise, stopPromise]);
     }
-    const timerPromise = sleeper(remaining).then(() => 'keepalive');
-    return await Promise.race([idlePromise, timerPromise, stopPromise]);
+    if (result === 'keepalive' || result === 'stop') {
+      if (typeof client.cancelIdle === 'function') {
+        await client.cancelIdle();
+      }
+    }
+    return result;
   } finally {
     if (stopInterval) {
       clearInterval(stopInterval);
