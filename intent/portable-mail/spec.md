@@ -29,7 +29,7 @@ Snail is one Node.js process that watches many IMAP accounts over IDLE. Each acc
 - Publishing to a package registry, shipping a container image, or shipping a per-OS binary.
 - A native Keychain module, or a signed helper, in this version.
 
-**Release phasing.** Untagged requirements belong to the first release, including live reload and the first-run sync in D15. That release completes every phase in `plan.md` (D16). There is no open question, no follow-up intent, and no later release in this spec.
+**Release phasing.** Untagged requirements belong to the first release, including live reload and the first-run sync in D15. That release completes every phase in `plan.md` (D16), with inline mode-`0600` config secrets and the `keychain://` and `op://` resolvers from D7. There is no open question and no later release in this spec. Nothing postponed from this release continues under `intent/portable-mail/`; a narrowed release would close this intent, and any postponed work would start in a new intent folder. This release is not narrowed.
 
 ## 3. Principles
 
@@ -312,7 +312,7 @@ The workflow then builds with `VERSION` set to the tag, attaches the tarball and
 
 **D14 — Models.** Spec, plan, and fresh-context review use Grok 4.7 High. Build phases use Composer 2.5. Do not substitute. If the named model cannot be launched, stop and ask.
 
-**D16 — Release scope and secret forms.** Decided. Closed. The tagged release that finishes portable mail completes every phase in `plan.md`. Secret handling for that release is all of D7: inline literals in the service config file at mode `0600` and owned by the service user (D2), macOS `keychain://` resolution, and Linux `op://` resolution. Inline literals remain a supported operator choice and the path used when tests must not call external stores. The Keychain and `op` resolvers are part of that same release because they are already implemented; they are not postponed and there is no follow-up intent for them. Rejected for this version: a separate password file or environment variable for mailbox or notifier secrets (distinct from the service-account token file for `op` in D7); a second intent or phase that reopens resolver delivery.
+**D16 — Release scope and secret forms.** Decided. Closed. The tagged release that finishes portable mail completes every phase in `plan.md`. Secret handling for that release is all of D7: inline literals in the service config file at mode `0600` and owned by the service user (D2), macOS `keychain://` resolution, and Linux `op://` resolution. Inline literals remain a supported operator choice and the path used when tests must not call external stores. The Keychain and `op` resolvers ship in that same release; scope is not narrowed and they are not postponed. If a release ever narrowed scope, that release would close this intent and postponed items would not continue here—they would open a new intent. This release is full scope. Rejected for this version: a separate password file or environment variable for mailbox or notifier secrets (distinct from the service-account token file for `op` in D7); carrying postponed work forward under `intent/portable-mail/`.
 
 ## 9. Open questions
 
