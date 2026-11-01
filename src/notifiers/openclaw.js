@@ -61,6 +61,17 @@ function buildDeviceAuthPayload(parts) {
   ].join('|');
 }
 
+/**
+ * @param {unknown} id
+ * @returns {string | null}
+ */
+function pendingRequestId(id) {
+  if (typeof id !== 'string' || !/^\d+$/.test(id)) {
+    return null;
+  }
+  return id;
+}
+
 class OpenClawClient {
   /**
    * @param {{
@@ -79,8 +90,8 @@ class OpenClawClient {
     /** @type {string[]} */
     this.queue = [];
     this.reqId = 1;
-    /** @type {Record<string, (msg: object) => void>} */
-    this.pendingReqs = {};
+    /** @type {Map<string, (msg: object) => void>} */
+    this.pendingReqs = new Map();
   }
 
   get wsUrl() {
@@ -148,7 +159,8 @@ class OpenClawClient {
         }
 
         if (msg.type === 'res') {
-          if (msg.method === 'connect' || (msg.id && !this.pendingReqs[msg.id])) {
+          const resId = pendingRequestId(msg.id);
+          if (msg.method === 'connect' || (resId && !this.pendingReqs.has(resId))) {
             if (!msg.ok) {
               reject(new Error(`Gateway connect failed: ${msg.error?.message ?? 'unknown'}`));
               ws.close();
@@ -163,9 +175,12 @@ class OpenClawClient {
             resolve(ws);
             return;
           }
-          const cb = this.pendingReqs[msg.id];
+          if (!resId) {
+            return;
+          }
+          const cb = this.pendingReqs.get(resId);
           if (cb) {
-            delete this.pendingReqs[msg.id];
+            this.pendingReqs.delete(resId);
             cb(msg);
           }
         }
@@ -192,13 +207,13 @@ class OpenClawClient {
     return new Promise((resolve, reject) => {
       const id = String(this.reqId++);
       const frame = JSON.stringify({ type: 'req', id, method, params });
-      this.pendingReqs[id] = (msg) => {
+      this.pendingReqs.set(id, (msg) => {
         if (msg.ok) {
           resolve(msg.payload);
         } else {
           reject(new Error(`${method} failed: ${msg.error?.message ?? 'unknown'}`));
         }
-      };
+      });
       if (this.ready && this.ws) {
         this.ws.send(frame);
       } else {
