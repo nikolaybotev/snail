@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| Implements | [spec.md](spec.md) Draft 2 |
-| Status | Draft 2 |
+| Implements | [spec.md](spec.md) Draft 3 |
+| Status | Draft 3 |
 | Stage | 3 · Build |
 
 Spec wins. Update this file in the same change whenever implementation departs from it.
@@ -26,7 +26,7 @@ Resolution: do not merge this pull request. Phase 1 waits until the v0.1.2 hotfi
 4. Apply those findings the same way.
 5. Start Phase 1 only after both reviews are applied and the owner says to build.
 
-The spec-against-intent review is applied in spec Draft 2 (findings F1–F5), together with the live `EXISTS` scenario. The plan-against-spec review has not been run. Do not start Phase 1.
+The spec-against-intent review is applied in spec Draft 2 (findings F1–F5), together with the live `EXISTS` scenario. The plan-against-spec review is applied in this draft (findings F1–F5). Spec Draft 3 amends FR14 so the reconnect `10000` is a recorded release and the pending `10000` is only the webhook budget. Do not start Phase 1. Phase 1 still waits until the v0.1.2 exists hotfix is on the default branch.
 
 The pull request that only adds this folder is not a build phase. Phase 1 is one branch and one pull request. Squash-merge it only when the required checks `test` and `javascript` have succeeded. A cancelled check has not succeeded. Do not use an admin override. Do not add `release:minor` or `release:major`.
 
@@ -37,11 +37,11 @@ The pull request that only adds this folder is not a build phase. Phase 1 is one
 | AC1 | `npm test` first start saves existing mail and does not wake | 1 |
 | AC2 | `npm test` untagged `EXISTS` while `IDLE` stays open, real imapflow client, one save, one wake | 1 |
 | AC3 | `npm test` resume, no duplicate, no gap, UIDVALIDITY change | 1 |
-| AC4 | `npm test` UID `4294967295` after that boundary, scripted wide MODSEQ parsed then omitted, unsafe UIDVALIDITY writes nothing | 1 |
-| AC5 | `npm test` auth failure and a downed server double from `5000`; `UNAVAILABLE` and a recovered drop stay at `5000` | 1 |
-| AC6 | `npm test` webhook timeout, HTTP 500, bearer, raw, success leaves `10000` pending, one OpenClaw wake | 1 |
+| AC4 | `npm test` UID `4294967295` after that boundary; scripted wide MODSEQ parsed then omitted; UIDVALIDITY `9007199254740993` on a SELECT imapflow accepts, throw `IMAP integer is not a safe integer`, sleep `5000`, next attempt `5000`, no state file and no message file | 1 |
+| AC5 | `npm test` doubling reconnect records and releases `5000`, then `10000`, then `20000`; `UNAVAILABLE` and a recovered drop each record and release `5000`; that reconnect `10000` is not left pending | 1 |
+| AC6 | `npm test` webhook file is on disk when the POST arrives; after the hang and after six `500`s, `lastUid` is that UID and a later sync does not write again; success leaves the webhook `10000` pending and posts once; bearer, raw, and one OpenClaw wake | 1 |
 | AC7 | `npm test` account B wakes while account A's reconnect sleep is pending | 1 |
-| AC8 | `npm test` secrets are at least 8 characters, logs omit them, sockets stay on `127.0.0.1` | 1 |
+| AC8 | `npm test` a failure line that would contain the password, and one that would contain the notifier secret, each show `[redacted]` and neither secret; both secrets are inline and at least 8 characters; sockets stay on `127.0.0.1` | 1 |
 | AC9 | `npm test` exits 0 | 1 |
 | AC10 | `npm test` one keepalive fetches nothing, and the cancelled wait does not later count as `exists` | 1 |
 
@@ -50,8 +50,8 @@ The pull request that only adds this folder is not a build phase. Phase 1 is one
 Files: `package.json`, `package-lock.json`, `snail.js`, `src/supervisor.js`, `test/imap-harness.test.js`, `intent/imap-harness/plan.md` only if a step departs from the spec
 
 1. Add devDependency `imapkit` at 5.2.0 and refresh the lockfile. Confirm the smallest plugin set that satisfies FR2, including a `NAMESPACE` answer and no `STARTTLS` or `COMPRESS` capability. Record the set in this phase's build notes if it is more than IDLE and CONDSTORE.
-2. If the default branch does not already fulfill `idle()` on imapflow's `exists` event, do that in `createImapFlowClient` and set `disableAutoIdle: true`. Reject `idle()` when the socket drops or `IDLE` fails. `cancelIdle` leaves IMAP IDLE, and the cancelled promise stays ineligible for a later `exists` (D3, FR4). In `raceIdle`, await `cancelIdle` on the keepalive path and the stop path before the next `idle`. Leave `createFakeImapClient` in place. Do not add the v0.1.2 mocked exists unit test.
-3. Add `test/imap-harness.test.js`. Each case starts imapkit on `127.0.0.1` port `0`, one server per account, and calls `startSupervisor` with `createImapFlowClient`. Use the FR14 sleeper: keepalive stays pending until the test releases it, `10000` stays pending when the response should win, and reconnect delays resolve after they are recorded except the call FR12 leaves pending. Cover AC1–AC8 and AC10. The IDLE case emits an untagged `EXISTS` while `IDLE` stays open, with the real client connected (FR6, AC2). Use synthetic account names. The password and the notifier secret are each at least 8 characters (D8, AC8). For the wide MODSEQ, send `HIGHESTMODSEQ` and `FETCH` `MODSEQ` of `9223372036854775807` with a script rule and assert imapflow parsed that BigInt (FR9a, D4). Storage that rewrites it does not count. UID `4294967295` arrives only after `notifyBoundary` is already that value (FR9). The unsafe UIDVALIDITY case must throw `IMAP integer is not a safe integer`. Auth failure and a server that stays down double from `5000`. `UNAVAILABLE` and a recovered drop each pass `5000` (FR10, D7).
+2. Set `disableAutoIdle: true` on `createImapFlowClient` whenever the factory does not already pass it (FR2, D3). If the default branch does not already fulfill `idle()` on imapflow's `exists` event, add that fulfillment. Reject `idle()` when the socket drops or `IDLE` fails. `cancelIdle` leaves IMAP IDLE, and the cancelled promise stays ineligible for a later `exists` (D3, FR4). In `raceIdle`, await `cancelIdle` on the keepalive path and the stop path before the next `idle`. Leave `createFakeImapClient` in place. Do not add the v0.1.2 mocked exists unit test. This step still waits until that hotfix is on the default branch.
+3. Add `test/imap-harness.test.js`. Each case starts imapkit on `127.0.0.1` port `0`, one server per account, and calls `startSupervisor` with `createImapFlowClient`. Arm the FR14 sleeper per case. The keepalive call is the default `idleKeepaliveMs` (`1740000`) and stays pending until the test releases it. Webhook success leaves `10000` pending and posts once. Webhook timeout resolves `10000`, then `1000`, `2000`, `4000`, `8000`, `16000`. The doubling reconnect path records and releases `5000`, then `10000`, then `20000`. `UNAVAILABLE` and a recovered drop each record and release `5000`. The one FR12 call stays pending. The password and the notifier secret are inline literals of at least 8 characters, so `resolve()` does not spend a `5000` on this sleeper (FR14, D8). Cover AC1–AC8 and AC10. The IDLE case emits an untagged `EXISTS` while `IDLE` stays open, with the real client connected (FR6, AC2). Use synthetic account names. For the wide MODSEQ, send `HIGHESTMODSEQ` and `FETCH` `MODSEQ` of `9223372036854775807` with a script rule and assert imapflow parsed that BigInt (FR9a, D4). Storage that rewrites it does not count. UID `4294967295` arrives only after `notifyBoundary` is already that value (FR9). Send UIDVALIDITY `9007199254740993` on a `SELECT` response imapflow's parser accepts. The throw is `IMAP integer is not a safe integer`. The recorded sleep is `5000`, and the next attempt is `5000` again. No state file and no message file are written (FR9a, FR10, D7). Script one failure whose unredacted message includes the password, and one whose message includes the notifier secret. Captured lines contain `[redacted]` and contain neither secret (FR13, AC8). When the webhook POST arrives, the `path` file is already on disk. After the hanging webhook, and after six `500` responses, state `lastUid` is that UID, and a later sync does not write the file again (FR11, P2, AC6).
 4. Do not edit `intent/portable-mail/`, `intent/config-error-restart/`, or `intent/imap-bigint/`. Do not change backoff constants, notify delays, webhook keys, or the OpenClaw sentence. Do not add HMAC. Do not enable TLS on the harness socket. Do not add the mocked exists unit test. Do not add a personal name, email, hostname, or real account name.
 
 DoD: `npm test` exits 0.
