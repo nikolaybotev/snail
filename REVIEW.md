@@ -4,9 +4,9 @@
 
 Run three passes and tag each finding with its pass:
 
-- **Bugs:** sending a body to a notifier; waking backlog or UIDVALIDITY-resync mail; losing or re-saving mail after notifier failure; duplicate saves; skipping catch-up; holding the mailbox in memory; waking before the file is durable; reconnecting unchanged accounts on reload; dropping live config or exiting on rejected reload; one account blocking another.
+- **Bugs:** sending a body to a notifier; waking backlog or UIDVALIDITY-resync mail; losing or re-saving mail after notifier failure; duplicate saves; skipping catch-up; holding the mailbox in memory; waking before the file is durable; reconnecting unchanged accounts on reload; dropping live config or exiting on rejected reload; one account blocking another; launchd wrapper exiting 2 when snail exits 2; wrapper status other than 143 after a SIGTERM child; systemd `ExecStart` not matching the pinned node-and-`snail.js` line from `intent/config-error-restart/spec.md`.
 - **Security:** secrets, tokens, or authorization header values in logs, argv, or files snail writes; group- or world-readable config; config not owned by the service user; secrets on the command line.
-- **Compliance:** the change matches `intent/portable-mail/spec.md` and `plan.md`, and the conventions in `AGENTS.md`. A departure from the plan that is not written back into `plan.md` in the same change is a compliance finding.
+- **Compliance:** the change matches the relevant intent (`intent/portable-mail/` or `intent/config-error-restart/` spec and plan), and the conventions in `AGENTS.md`. A departure from the plan that is not written back into `plan.md` in the same change is a compliance finding.
 
 Also apply the installed **build-practices** skill when reviewing build pull requests.
 
