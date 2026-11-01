@@ -129,6 +129,12 @@ Files: `snail.js`, `src/supervisor.js`, `test/supervisor.test.js`
 
 DoD: `npm test` exits 0.
 
+**Phase 5 departures (implemented):**
+
+- `scripts/build.sh` copies the `src/` tree in this phase because `snail.js` loads modules from it; phase 7 still expands the D9 member list for service install files.
+- The FR6 connect-backoff acceptance check in `test/supervisor.test.js` simulates the per-failure delay sequence directly with an injected sleeper (same 5s→60s cap as `runAccountLoop`) instead of spinning a long-lived failing IMAP connect loop in-process.
+- The 29-minute IDLE keepalive check exercises `raceIdle` with an injected clock and fake IMAP `cancelIdle`, not a full `runAccountLoop` integration run.
+
 ## Phase 6 — Live reload
 
 Files: `src/config-reload.js`, `src/config-watch.js`, `test/config-reload.test.js`, `snail.js`
