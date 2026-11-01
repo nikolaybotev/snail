@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Implements | [spec.md](spec.md) Draft 2 |
-| Status | Draft 3 |
+| Status | Draft 4 |
 | Stage | 3 · Build |
 
 Spec wins. Update this file in the same change whenever implementation departs from it.
@@ -35,6 +35,10 @@ Squash-merge that pull request only when every required check has succeeded. Req
 | AC5 | `npm test` spawns the wrapper and reads the stub's stdout and stderr markers | 0 |
 
 `npm test` is `node --test`. Healthy: exit 0.
+
+## Wrapper name at phase start
+
+`v0.1.1` renames `scripts/run-service.sh` to `scripts/snail-service.sh` before this phase is built. When the phase starts, update the wrapper name in [spec.md](spec.md) and in this plan to `scripts/snail-service.sh` before editing the script. The `ExecStart` pin in step 2 stays `/ABS/PATH/TO/node /ABS/PATH/TO/HOME/snail/snail.js --config /ABS/PATH/TO/HOME/.config/snail/config.toml`.
 
 ## Phase 0 — Config-error restart
 
