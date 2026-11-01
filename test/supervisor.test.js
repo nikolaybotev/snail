@@ -10,6 +10,7 @@ const { WebSocketServer } = require('ws');
 
 const {
   IDLE_KEEPALIVE_MS,
+  coerceImapInteger,
   removeLeftoverTmpFiles,
   uidsToSync,
   runAccountLoop,
@@ -97,6 +98,82 @@ function inlineResolver() {
     clearCache: () => {},
   };
 }
+
+test('AC3: coerceImapInteger maps safe BigInt, keeps numbers, rejects unsafe BigInt', () => {
+  assert.equal(coerceImapInteger(12), 12);
+  assert.equal(coerceImapInteger(99n), 99);
+  assert.throws(() => coerceImapInteger(2n ** 53n + 1n), /safe integer/);
+});
+
+test('AC1 AC2: fake client BigInt mailbox writes numeric state, message, and webhook', async () => {
+  const mailDir = tempDir('snail-bigint-');
+  fs.writeFileSync(
+    path.join(mailDir, '.snail-state.json'),
+    JSON.stringify({
+      uidValidity: 7,
+      notifyBoundary: 100,
+      backlogUid: 0,
+      lastUid: 99,
+    }),
+    { mode: 0o600 },
+  );
+  /** @type {Record<string, unknown> | null} */
+  let webhookPayload = null;
+  const imap = createFakeImapClient({
+    uidNext: 101n,
+    uidValidity: 7n,
+    messages: {
+      100: {
+        body: 'hello',
+        subject: 'Subj',
+        from: [{ address: 'ada@example.com' }],
+        modseq: 999999999999n,
+      },
+    },
+  });
+  const fetchImpl = async (_url, init) => {
+    webhookPayload = JSON.parse(String(init?.body));
+    return new Response('', { status: 200 });
+  };
+  const stopSignal = { stopped: false };
+  const loop = runAccountLoop({
+    account: baseAccount({ mail_dir: mailDir }),
+    secrets: inlineResolver(),
+    imapFactory: () => imap,
+    log: () => {},
+    fetchImpl,
+    stopSignal,
+    sleeper: webhookFriendlySleeper([]),
+    stopAfterSync: true,
+  });
+
+  await waitFor(() => readSnailState(mailDir) !== null);
+  await waitFor(() => webhookPayload !== null);
+  await stopLoops(stopSignal, loop);
+
+  const state = readSnailState(mailDir);
+  assert.ok(state);
+  for (const key of ['uidValidity', 'notifyBoundary', 'backlogUid', 'lastUid']) {
+    assert.equal(typeof state[key], 'number', key);
+  }
+  assert.equal(state.uidValidity, 7);
+
+  const msgFiles = fs
+    .readdirSync(mailDir)
+    .filter((f) => f.endsWith('.json') && !f.startsWith('.'));
+  assert.equal(msgFiles.length, 1);
+  const saved = JSON.parse(fs.readFileSync(path.join(mailDir, msgFiles[0]), 'utf8'));
+  assert.equal(typeof saved.uid, 'number');
+  assert.equal(typeof saved.uid_validity, 'number');
+  assert.equal(saved.uid, 100);
+  assert.equal(saved.uid_validity, 7);
+  assert.ok(!('modseq' in saved));
+
+  assert.ok(webhookPayload);
+  assert.equal(typeof webhookPayload.uid, 'number');
+  assert.equal(typeof webhookPayload.uid_validity, 'number');
+  assert.ok(!('modseq' in webhookPayload));
+});
 
 test('removeLeftoverTmpFiles deletes planted tmp files', () => {
   const mailDir = tempDir('snail-tmp-');

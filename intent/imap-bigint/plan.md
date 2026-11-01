@@ -22,9 +22,9 @@ None. The integer coercion is D1. The script rename is D3. Backoff stays as D4. 
 4. Apply those findings the same way.
 5. Start Phase 1 only after both reviews are applied and the owner says to build.
 
-The spec-against-intent review is applied in spec Draft 2 (findings F1–F4). The plan-against-spec review has not been run. Phase 1 has not started.
+The spec-against-intent review is applied in spec Draft 2 (findings F1–F4). Phase 1 implementation is on this branch.
 
-Phase 1 is one branch and one pull request. Squash-merge it only when the required checks `test` and `javascript` have succeeded. A cancelled check has not succeeded. Do not use an admin override. Do not add `release:minor` or `release:major`. That merge publishes `v0.1.1` (D5).
+Phase 1 is one branch and one pull request. Squash-merge it only when the required checks `test`, `javascript`, and CodeQL have succeeded. A cancelled check has not succeeded. Do not use an admin override. Do not add `release:minor` or `release:major`. That merge publishes `v0.1.1` (D5).
 
 ## Acceptance-criteria coverage
 
@@ -49,8 +49,8 @@ Files: `snail.js`, `src/supervisor.js`, `test/supervisor.test.js`, `test/imap-cl
 
 DoD: `npm test` exits 0.
 
-The phase pull request has neither `release:minor` nor `release:major`. Squash-merge it when `test` and `javascript` are green. That merge is the one push that publishes `v0.1.1` with both changes (D5).
+The phase pull request has neither `release:minor` nor `release:major`. Squash-merge it when `test`, `javascript`, and CodeQL are green. That merge is the one push that publishes `v0.1.1` with both changes (D5).
 
 ### Build notes (Phase 1)
 
-None yet. This phase has not started.
+None. Implementation matches the plan.

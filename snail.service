@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/ABS/PATH/TO/HOME/snail/scripts/run-service.sh /ABS/PATH/TO/node /ABS/PATH/TO/HOME/snail/snail.js --config /ABS/PATH/TO/HOME/.config/snail/config.toml
+ExecStart=/ABS/PATH/TO/HOME/snail/scripts/snail-service.sh /ABS/PATH/TO/node /ABS/PATH/TO/HOME/snail/snail.js --config /ABS/PATH/TO/HOME/.config/snail/config.toml
 Restart=on-failure
 RestartPreventExitStatus=2
 RestartSec=10

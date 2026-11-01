@@ -8,7 +8,7 @@
 	<string>Aqua</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/ABS/PATH/TO/HOME/snail/scripts/run-service.sh</string>
+		<string>/ABS/PATH/TO/HOME/snail/scripts/snail-service.sh</string>
 		<string>/ABS/PATH/TO/node</string>
 		<string>/ABS/PATH/TO/HOME/snail/snail.js</string>
 		<string>--config</string>
