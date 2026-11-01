@@ -33,7 +33,7 @@ The later code merge, with neither `release:minor` nor `release:major`, publishe
 - A `release:minor` or `release:major` label on the later phase pull request.
 - Deploy.
 
-**Release phasing.** This release is the single later phase. It merges when the proof in G3 passes, and that merge publishes `v0.1.6`. A failed proof stops the phase and names no other timer workaround. The phase does not merge. This pull request only adds this folder's intent and spec and stays unmerged. Nothing in this intent is postponed.
+**Release phasing.** This release is the single later phase. It merges when the proof in G3 passes, and that merge publishes `v0.1.6`. A failed proof stops the phase and names no other timer workaround. The phase does not merge. This pull request adds this folder's intent, spec, and plan, and stays unmerged. Nothing in this intent is postponed.
 
 ## 3. Principles
 

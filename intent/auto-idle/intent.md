@@ -44,7 +44,7 @@ The code change is one later merge. With neither `release:minor` nor `release:ma
 - The proof is one short-clock harness run with auto-IDLE on: no `Socket timeout` across several quiet periods, and one live EXISTS saved. A wall-clock wait of 10 minutes is not the proof.
 - A failed short-clock proof stops the phase and names no other timer workaround. A failed proof does not merge.
 - When the proof passes, `maxIdleTime` is off the production path, and the `AGENTS.md` and `REVIEW.md` sentences that require it beside `disableAutoIdle` change in that same change.
-- This pull request adds this file and [spec.md](spec.md). The plan and the code stay out. It stays unmerged. Every push to the default branch runs the release workflow. Checked 2026-11-01: `v0.1.5` is `fa91b2f`, and `scripts/release-version.sh` patch-bumps a squash merge that has neither `release:minor` nor `release:major`, so merging this pull request would publish `v0.1.6` without the client change.
+- This pull request adds this file, [spec.md](spec.md), and [plan.md](plan.md). The code stays out. It stays unmerged. Every push to the default branch runs the release workflow. Checked 2026-11-01: `v0.1.5` is `fa91b2f`, and `scripts/release-version.sh` patch-bumps a squash merge that has neither `release:minor` nor `release:major`, so merging this pull request would publish `v0.1.6` without the client change.
 - The later phase pull request also carries neither `release:minor` nor `release:major`.
 - Placeholders only. No personal names, emails, hostnames, machine names, or real mailbox names.
 - This is a new intent. Other intent folders stay as they are.
