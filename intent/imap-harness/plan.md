@@ -56,4 +56,17 @@ Files: `package.json`, `package-lock.json`, `snail.js`, `src/supervisor.js`, `te
 
 DoD: `npm test` exits 0.
 
-The phase pull request has neither `release:minor` nor `release:major`. Squash-merge it when `test` and `javascript` are green. That merge publishes the next patch after the v0.1.2 hotfix, and that tag contains the live harness (D6).
+The phase pull request has neither `release:minor` nor `release:major`. Squash-merge it when `test`, `javascript`, and CodeQL are green. That merge publishes the next patch after the v0.1.2 hotfix, and that tag contains the live harness (D6).
+
+### Phase 1 build notes (2026-11-01)
+
+- imapkit plugins: `idle`, `condstore`, `namespace`, `id`, `auth-plain`, `sasl-ir`, `enable` (no `STARTTLS` or `COMPRESS`).
+- `raceIdle` awaits `cancelIdle` before returning `keepalive` or `stop`.
+
+### Phase 1 departures
+
+- **AC4 UID `4294967295` wake:** Pre-seed `.snail-state.json`, `backlogUid`, `lastUid`, and the backlog message file before `startSupervisor`. A cold start with `notifyBoundary` already `4294967295` makes `uidsToSync` walk `1..4294967294` as backlog; this harness mailbox only holds UID `4294967294`.
+- **AC4 unsafe UIDVALIDITY:** Use an imapkit script rule on the `SELECT` untagged `UIDVALIDITY` response (`9007199254740993`). `control.resetUidValidity` rejects values above `2^32 - 1`.
+- **AC4 MODSEQ:** Assert `highestModseq` on a dedicated server via a script `after` line on `SELECT`, not via storage.
+- **AC8 redaction:** Assert `formatLogLine` with inline secrets plus session `remoteAddress` checks from live cases; imapflow auth errors do not echo the password in `err.message`.
+- **AC6 webhook `500` path:** Use injected `fetchImpl` returning `500` so attempts stay fast; the hanging HTTP case still uses a real listener with FR14 resolving the `10000` attempt budget.

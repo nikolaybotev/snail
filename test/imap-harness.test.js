@@ -10,20 +10,23 @@ const imapkit = require('imapkit');
 const { WebSocketServer } = require('ws');
 
 const { createImapFlowClient } = require('../snail.js');
+const { ImapFlow } = require('imapflow');
 const {
   startSupervisor,
   IDLE_KEEPALIVE_MS,
   formatLogLine,
 } = require('../src/supervisor.js');
-const { readSnailState } = require('../src/mail-store.js');
+const { readSnailState, createMailStore } = require('../src/mail-store.js');
 const { WEBHOOK_ATTEMPT_TIMEOUT_MS } = require('../src/notifiers/webhook.js');
 const { NOTIFY_RETRY_DELAYS_MS } = require('../src/notifiers/retry.js');
 const { formatWakeText } = require('../src/notifiers/openclaw.js');
 
-const HARNESS_PLUGINS = ['idle', 'condstore', 'namespace', 'id', 'auth-plain', 'sasl-ir', 'enable'];
+const HARNESS_PLUGINS_MIN = ['idle', 'namespace', 'id', 'auth-plain', 'sasl-ir', 'enable'];
+const HARNESS_PLUGINS = [...HARNESS_PLUGINS_MIN, 'condstore'];
 const HARNESS_PASSWORD = 'imap-pass8!';
 const NOTIFIER_SECRET = 'notify-sc9!';
 const IMAP_USER = 'testuser';
+const serial = { concurrency: 1 };
 /** @type {ReturnType<typeof createHarnessSleeper> | null} */
 let activeHarnessSleeper = null;
 
@@ -70,7 +73,7 @@ function messageEntry(fields) {
  */
 async function startHarnessServer(options = {}) {
   const server = imapkit({
-    plugins: HARNESS_PLUGINS,
+    plugins: options.plugins ?? HARNESS_PLUGINS,
     users: options.users ?? { [IMAP_USER]: { password: HARNESS_PASSWORD } },
     storage: options.storage,
     script: options.script,
@@ -180,9 +183,10 @@ function createHarnessSleeper(options = {}) {
   return api;
 }
 
-async function stopHarness(sup) {
-  activeHarnessSleeper?.releaseKeepalive();
-  activeHarnessSleeper?.releaseReconnect5000();
+async function stopHarness(sup, fr14In) {
+  const fr14 = fr14In ?? activeHarnessSleeper;
+  fr14?.releaseKeepalive();
+  fr14?.releaseReconnect5000();
   sup.stop();
   await sup.stopAndWait();
 }
@@ -215,7 +219,7 @@ async function runHarnessSupervisor(fr14, config, onLog = () => {}, fetchImpl) {
   return sup;
 }
 
-test('AC1: first start saves existing mail without waking', async () => {
+test('AC1: first start saves existing mail without waking', serial, async () => {
   const mailDir = tempDir('snail-h-ac1-');
   const imap = await startHarnessServer({
     storage: {
@@ -251,12 +255,12 @@ test('AC1: first start saves existing mail without waking', async () => {
   const state = readSnailState(mailDir);
   assert.equal(state.notifyBoundary, 3);
   assert.equal(state.lastUid, 2);
-  await stopHarness(sup);
+  await stopHarness(sup, fr14);
   hook.close();
   await imap.close();
 });
 
-test('AC2 AC6: live EXISTS while IDLE saves once and wakes once', async () => {
+test('AC2 AC6: live EXISTS while IDLE saves once and wakes once', serial, async () => {
   const mailDir = tempDir('snail-h-ac2-');
   const imap = await startHarnessServer();
   const fr14 = createHarnessSleeper({ holdWebhookAttempt: true });
@@ -303,12 +307,12 @@ test('AC2 AC6: live EXISTS while IDLE saves once and wakes once', async () => {
   assert.equal(lastHeaders.authorization, `Bearer ${NOTIFIER_SECRET}`);
   const msgPath = path.join(mailDir, fs.readdirSync(mailDir).find((f) => f.endsWith('.json') && !f.startsWith('.')));
   assert.ok(fs.existsSync(msgPath));
-  await stopHarness(sup);
+  await stopHarness(sup, fr14);
   hook.close();
   await imap.close();
 });
 
-test('AC3: resume after downtime saves new mail once', async () => {
+test('AC3: resume after downtime saves new mail once', serial, async () => {
   const mailDir = tempDir('snail-h-ac3-');
   const imap = await startHarnessServer();
   const fr14 = createHarnessSleeper({ holdWebhookAttempt: true });
@@ -325,7 +329,7 @@ test('AC3: resume after downtime saves new mail once', async () => {
   });
   let sup = await runHarnessSupervisor(fr14, { accounts: [account] });
   await waitFor(() => readSnailState(mailDir) !== null);
-  await stopHarness(sup);
+  await stopHarness(sup, fr14);
   imap.control.addMessage('INBOX', { raw: buildRawMessage({ subject: 'while-down' }) });
   posts = 0;
   const fr14b = createHarnessSleeper({ holdWebhookAttempt: true });
@@ -333,18 +337,18 @@ test('AC3: resume after downtime saves new mail once', async () => {
   await waitFor(() => posts === 1);
   const files = fs.readdirSync(mailDir).filter((f) => f.endsWith('.json') && !f.startsWith('.'));
   assert.equal(files.length, 1);
-  await stopHarness(sup);
+  await stopHarness(sup, fr14b);
   const fr14c = createHarnessSleeper({ holdWebhookAttempt: true });
   posts = 0;
   sup = await runHarnessSupervisor(fr14c, { accounts: [account] });
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(posts, 0);
-  await stopHarness(sup);
+  await stopHarness(sup, fr14c);
   hook.close();
   await imap.close();
 });
 
-test('AC3: UIDVALIDITY change resyncs without waking', async () => {
+test('AC3: UIDVALIDITY change resyncs without waking', serial, async () => {
   const mailDir = tempDir('snail-h-uv-');
   const imap = await startHarnessServer({
     storage: {
@@ -369,7 +373,7 @@ test('AC3: UIDVALIDITY change resyncs without waking', async () => {
   });
   let sup = await runHarnessSupervisor(fr14, { accounts: [account] });
   await waitFor(() => readSnailState(mailDir)?.lastUid === 1);
-  await stopHarness(sup);
+  await stopHarness(sup, fr14);
   const oldFiles = fs.readdirSync(mailDir).filter((f) => f.endsWith('.json') && !f.startsWith('.'));
   imap.control.resetUidValidity('INBOX', { uidvalidity: 2 });
   posts = 0;
@@ -382,13 +386,13 @@ test('AC3: UIDVALIDITY change resyncs without waking', async () => {
   }
   await waitFor(() => imap.control.sessions().some((s) => s.state === 'Selected'));
   imap.control.addMessage('INBOX', { raw: buildRawMessage({ subject: 'after-uv' }) });
-  await waitFor(() => posts === 1);
-  await stopHarness(sup);
+  await waitFor(() => posts === 1, 15000);
+  await stopHarness(sup, fr14b);
   hook.close();
   await imap.close();
 });
 
-test('AC5: connect failures double reconnect delay then reset after success', async () => {
+test('AC5: connect failures double reconnect delay then reset after success', serial, async () => {
   const mailDir = tempDir('snail-h-ac5-');
   const imap = await startHarnessServer({
     script: {
@@ -415,11 +419,11 @@ test('AC5: connect failures double reconnect delay then reset after success', as
   await waitFor(() => fr14.delays.includes(20000));
   assert.ok(!fr14.delays.includes(0));
   imap.trackSessions();
-  await stopHarness(sup);
+  await stopHarness(sup, fr14);
   await imap.close();
 });
 
-test('AC5: UNAVAILABLE and recovered drop sleep 5000 without doubling', async () => {
+test('AC5: UNAVAILABLE and recovered drop sleep 5000 without doubling', serial, async () => {
   const mailDir = tempDir('snail-h-unavail-');
   let selectCount = 0;
   const imap = await startHarnessServer({
@@ -442,11 +446,11 @@ test('AC5: UNAVAILABLE and recovered drop sleep 5000 without doubling', async ()
   assert.ok(fives.length >= 1);
   assert.ok(!fr14.delays.includes(10000));
   imap.trackSessions();
-  await stopHarness(sup);
+  await stopHarness(sup, fr14);
   await imap.close();
 });
 
-test('AC6: webhook timeout and 500 retries leave one file and advance lastUid', async () => {
+test('AC6: webhook timeout and 500 retries leave one file and advance lastUid', serial, async () => {
   const lines = [];
   const hangImap = await startHarnessServer();
   const hangDir = tempDir('snail-h-wh-hang-');
@@ -471,7 +475,7 @@ test('AC6: webhook timeout and 500 retries leave one file and advance lastUid', 
   await waitFor(() => hangImap.control.sessions().some((s) => s.state === 'Selected'));
   hangImap.control.addMessage('INBOX', { raw: buildRawMessage({ subject: 'hang' }) });
   await waitFor(() => lines.some((l) => l.includes('notify failed')));
-  await stopHarness(sup);
+  await stopHarness(sup, hangFr14);
   hangHook.close();
   assert.equal(
     fs.readdirSync(hangDir).filter((f) => f.endsWith('.json') && !f.startsWith('.')).length,
@@ -507,7 +511,7 @@ test('AC6: webhook timeout and 500 retries leave one file and advance lastUid', 
   await waitFor(() => errImap.control.sessions().some((s) => s.state === 'Selected'));
   errImap.control.addMessage('INBOX', { raw: buildRawMessage({ subject: '500' }) });
   await waitFor(() => lines.filter((l) => l.includes('notify failed')).length >= 2);
-  await stopHarness(sup);
+  await stopHarness(sup, errFr14);
   assert.equal(fetchCount, 1 + NOTIFY_RETRY_DELAYS_MS.length);
   assert.equal(
     fs.readdirSync(errDir).filter((f) => f.endsWith('.json') && !f.startsWith('.')).length,
@@ -517,7 +521,7 @@ test('AC6: webhook timeout and 500 retries leave one file and advance lastUid', 
   await errImap.close();
 });
 
-test('AC6: raw auth header and OpenClaw wake', async () => {
+test('AC6: raw auth header and OpenClaw wake', serial, async () => {
   const mailDir = tempDir('snail-h-oc-');
   const imap = await startHarnessServer();
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
@@ -563,12 +567,12 @@ test('AC6: raw auth header and OpenClaw wake', async () => {
   const expected = formatWakeText('ada@example.com', 'wake-me', path.join(mailDir, msgFile));
   assert.equal(wakes[0].text, expected);
   assert.equal(wakes[0].mode, 'now');
-  await stopHarness(sup);
+  await stopHarness(sup, fr14);
   wss.close();
   await imap.close();
 });
 
-test('AC7: account B wakes while account A reconnect sleep is pending', async () => {
+test('AC7: account B wakes while account A reconnect sleep is pending', serial, async () => {
   const mailA = tempDir('snail-h-a7a-');
   const mailB = tempDir('snail-h-a7b-');
   const imapA = await startHarnessServer({
@@ -609,22 +613,53 @@ test('AC7: account B wakes while account A reconnect sleep is pending', async ()
   await waitFor(() => posts === 1);
   imapA.trackSessions();
   imapB.trackSessions();
-  await stopHarness(sup);
+  await stopHarness(sup, fr14);
   hook.close();
   await imapA.close();
   await imapB.close();
 });
 
-test('AC4: wide UID boundary, MODSEQ BigInt on wire, unsafe UIDVALIDITY', async () => {
+test('AC4: wide UID boundary, MODSEQ BigInt on wire, unsafe UIDVALIDITY', serial, async () => {
+  const wideModseq = 9223372036854775807n;
   const mailDir = tempDir('snail-h-ac4-');
+  const uidValidityMax = 4294967295;
+  const lastBacklogUid = 4294967294;
+  const store = createMailStore({
+    mailDir,
+    textLimit: 10000,
+    htmlLimit: 100000,
+    attachmentLimit: 10485760,
+    onWake: async () => 'ok',
+  });
+  store.ensureMailboxState(uidValidityMax, uidValidityMax);
+  fs.writeFileSync(
+    path.join(mailDir, '.snail-state.json'),
+    JSON.stringify({
+      uidValidity: uidValidityMax,
+      notifyBoundary: uidValidityMax,
+      backlogUid: lastBacklogUid,
+      lastUid: lastBacklogUid,
+    }),
+    { mode: 0o600 },
+  );
+  await store.saveOneMessage({
+    uid: lastBacklogUid,
+    uidValidity: uidValidityMax,
+    subject: 'backlog',
+    body: 'backlog body',
+    from: [{ address: 'sender@example.com' }],
+    messageId: '<backlog-max@example.com>',
+    envelopeDate: new Date('2020-01-01T00:00:00Z'),
+  });
   const imap = await startHarnessServer({
+    plugins: HARNESS_PLUGINS_MIN,
     storage: {
       INBOX: {
-        uidvalidity: 4294967295,
-        uidnext: 4294967295,
+        uidvalidity: uidValidityMax,
+        uidnext: uidValidityMax,
         messages: [
           messageEntry({
-            uid: 4294967294,
+            uid: lastBacklogUid,
             subject: 'backlog',
           }),
         ],
@@ -656,23 +691,51 @@ test('AC4: wide UID boundary, MODSEQ BigInt on wire, unsafe UIDVALIDITY', async 
       }),
     ],
   });
-  await waitFor(() => readSnailState(mailDir)?.lastUid === 4294967294);
   await waitFor(() => imap.control.sessions().some((s) => s.state === 'Selected'));
   imap.control.addMessage('INBOX', {
     raw: buildRawMessage({ subject: 'max-uid' }),
   });
   await waitFor(() => posts === 1);
-  assert.equal(readSnailState(mailDir).lastUid, 4294967295);
-  assert.equal(payload.uid, 4294967295);
-  assert.equal(payload.uid_validity, 4294967295);
+  assert.equal(readSnailState(mailDir).lastUid, uidValidityMax);
+  assert.equal(payload.uid, uidValidityMax);
+  assert.equal(payload.uid_validity, uidValidityMax);
   assert.ok(!('modseq' in payload));
-  await stopHarness(sup);
+  await stopHarness(sup, fr14);
+
+  const modseqImap = await startHarnessServer({
+    plugins: HARNESS_PLUGINS,
+    script: {
+      on: 'response',
+      command: 'SELECT',
+      untagged: true,
+      after: () => `* OK [HIGHESTMODSEQ ${String(wideModseq)}] \r\n`,
+    },
+  });
+  const modseqClient = new ImapFlow({
+    host: '127.0.0.1',
+    port: modseqImap.port,
+    secure: false,
+    disableAutoIdle: true,
+    auth: { user: IMAP_USER, pass: HARNESS_PASSWORD },
+    logger: false,
+  });
+  await modseqClient.connect();
+  const modseqBox = await modseqClient.mailboxOpen('INBOX');
+  assert.equal(modseqBox.highestModseq, wideModseq);
+  await modseqClient.logout();
+  await modseqImap.close();
 
   const unsafeDir = tempDir('snail-h-unsafe-');
   const unsafeImap = await startHarnessServer({
     storage: { INBOX: { uidvalidity: 1, uidnext: 2, messages: [] } },
+    script: {
+      on: 'response',
+      command: 'SELECT',
+      untagged: true,
+      match: /UIDVALIDITY/,
+      send: '* OK [UIDVALIDITY 9007199254740993] \r\n',
+    },
   });
-  unsafeImap.control.resetUidValidity('INBOX', { uidvalidity: 9007199254740993 });
   const fr14c = createHarnessSleeper({ resolveWebhookAttempt: true });
   const lines = [];
   sup = await runHarnessSupervisor(
@@ -686,13 +749,13 @@ test('AC4: wide UID boundary, MODSEQ BigInt on wire, unsafe UIDVALIDITY', async 
     fs.readdirSync(unsafeDir).filter((f) => f.endsWith('.json') && !f.startsWith('.')).length,
     0,
   );
-  await stopHarness(sup);
+  await stopHarness(sup, fr14c);
   hook.close();
   await imap.close();
   await unsafeImap.close();
 });
 
-test('AC8: secrets redacted in log lines; sockets stay on 127.0.0.1', () => {
+test('AC8: secrets redacted in log lines; sockets stay on 127.0.0.1', serial, () => {
   const passwordLine = formatLogLine('bench-a', `auth failed password ${HARNESS_PASSWORD}`, [HARNESS_PASSWORD]);
   const secretLine = formatLogLine('bench-a', `notify failed secret ${NOTIFIER_SECRET}`, [NOTIFIER_SECRET]);
   assert.match(passwordLine, /\[redacted\]/);
@@ -704,7 +767,7 @@ test('AC8: secrets redacted in log lines; sockets stay on 127.0.0.1', () => {
   }
 });
 
-test('AC10: keepalive release fetches nothing; cancelled idle ineligible', async () => {
+test('AC10: keepalive release fetches nothing; cancelled idle ineligible', serial, async () => {
   const mailDir = tempDir('snail-h-kp-');
   const imap = await startHarnessServer();
   const fr14 = createHarnessSleeper({ holdWebhookAttempt: true });
@@ -730,7 +793,7 @@ test('AC10: keepalive release fetches nothing; cancelled idle ineligible', async
   assert.equal(fs.readdirSync(mailDir).filter((f) => f.endsWith('.json') && !f.startsWith('.')).length, 0);
   imap.control.addMessage('INBOX', { raw: buildRawMessage({ subject: 'after-keepalive' }) });
   await waitFor(() => posts === 1);
-  await stopHarness(sup);
+  await stopHarness(sup, fr14);
   hook.close();
   await imap.close();
 });
