@@ -5,6 +5,37 @@ const WebSocket = require('ws');
 
 const { notifyWithRetries, defaultSleeper } = require('./retry.js');
 
+/** Outbound gateway RPC methods this client sends (spec D5 handshake). */
+const OUTBOUND_GATEWAY_METHODS = new Set(['connect', 'wake']);
+
+/** Inbound `res.method` values accepted from the gateway. */
+const INBOUND_GATEWAY_METHODS = new Set(['connect', 'wake']);
+
+/**
+ * @param {unknown} method
+ * @returns {'connect' | 'wake' | null}
+ */
+function outboundGatewayMethod(method) {
+  if (method === 'connect' || method === 'wake') {
+    return method;
+  }
+  return null;
+}
+
+/**
+ * @param {unknown} method
+ * @returns {'connect' | 'wake' | null}
+ */
+function inboundGatewayMethod(method) {
+  if (method === undefined || method === null) {
+    return null;
+  }
+  if (method === 'connect' || method === 'wake') {
+    return method;
+  }
+  return null;
+}
+
 /**
  * @param {string} from
  * @param {string} subject
@@ -90,7 +121,7 @@ class OpenClawClient {
     /** @type {string[]} */
     this.queue = [];
     this.reqId = 1;
-    /** @type {Map<string, (msg: object) => void>} */
+    /** @type {Map<string, { method: 'wake', resolve: (value: unknown) => void, reject: (err: Error) => void }>} */
     this.pendingReqs = new Map();
   }
 
@@ -160,7 +191,11 @@ class OpenClawClient {
 
         if (msg.type === 'res') {
           const resId = pendingRequestId(msg.id);
-          if (msg.method === 'connect' || (resId && !this.pendingReqs.has(resId))) {
+          const inboundMethod = inboundGatewayMethod(msg.method);
+          if (msg.method !== undefined && msg.method !== null && inboundMethod === null) {
+            return;
+          }
+          if (inboundMethod === 'connect' || (resId && !this.pendingReqs.has(resId))) {
             if (!msg.ok) {
               reject(new Error(`Gateway connect failed: ${msg.error?.message ?? 'unknown'}`));
               ws.close();
@@ -178,10 +213,23 @@ class OpenClawClient {
           if (!resId) {
             return;
           }
-          const cb = this.pendingReqs.get(resId);
-          if (cb) {
-            this.pendingReqs.delete(resId);
-            cb(msg);
+          const pending = this.pendingReqs.get(resId);
+          if (!pending) {
+            return;
+          }
+          this.pendingReqs.delete(resId);
+          if (inboundMethod !== null && inboundMethod !== pending.method) {
+            pending.reject(new Error(`unexpected gateway response method: ${String(msg.method)}`));
+            return;
+          }
+          if (msg.ok) {
+            pending.resolve(msg.payload);
+          } else {
+            const message =
+              msg.error && typeof msg.error.message === 'string'
+                ? msg.error.message
+                : 'unknown';
+            pending.reject(new Error(`${pending.method} failed: ${message}`));
           }
         }
       });
@@ -204,16 +252,17 @@ class OpenClawClient {
    * @param {object} params
    */
   sendGatewayReq(method, params) {
+    const outbound = outboundGatewayMethod(method);
+    if (outbound === null || !OUTBOUND_GATEWAY_METHODS.has(outbound)) {
+      return Promise.reject(new Error('unsupported gateway method'));
+    }
+    if (outbound !== 'wake') {
+      return Promise.reject(new Error('unsupported gateway method'));
+    }
     return new Promise((resolve, reject) => {
       const id = String(this.reqId++);
-      const frame = JSON.stringify({ type: 'req', id, method, params });
-      this.pendingReqs.set(id, (msg) => {
-        if (msg.ok) {
-          resolve(msg.payload);
-        } else {
-          reject(new Error(`${method} failed: ${msg.error?.message ?? 'unknown'}`));
-        }
-      });
+      const frame = JSON.stringify({ type: 'req', id, method: outbound, params });
+      this.pendingReqs.set(id, { method: 'wake', resolve, reject });
       if (this.ready && this.ws) {
         this.ws.send(frame);
       } else {
