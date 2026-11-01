@@ -27,7 +27,7 @@ One user-level service, on Linux and on macOS, reads one config and watches many
 - One process, many accounts. One account's failure must not stop or delay the others. Each account has its own state and its own log tag.
 - The config is one TOML file in the same format and the same location style as [backup-folder](https://github.com/nikolaybotev/backup-folder): a repeated table per account, mode `0600`, path `~/.config/snail/config.toml`, passed with `--config` as an absolute path.
 - Live reload is required. Adding, changing, or removing an account takes effect without a restart and without disturbing the other accounts, matching drop-box-watcher in that same repository.
-- The config holds secret references, never inline secrets. Secrets never appear on the command line or in logs.
+- Secrets never appear on the command line or in logs. The spec decides how the config file holds them.
 - The OpenClaw gateway integration keeps working.
 - No root. Restart on failure. Clean logs.
 - File names stay sortable and unique. The JSON file schema is documented, because agents read the files.
@@ -35,7 +35,7 @@ One user-level service, on Linux and on macOS, reads one config and watches many
 
 ## Open questions (carried into spec.md)
 
-None. [spec.md](spec.md) decides the TOML config and its location (D1, D2), live reload (D4), secrets (D7), and the release artifact (D9).
+1. When the state file is missing or unusable, catch-up either replays from UID 0 or starts at the mailbox high-water mark. [spec.md](spec.md) leaves both options open (Q1). It decides the TOML config (D1, D2), live reload (D4), secrets (D7), and the release artifact (D9).
 
 ## Original prompt (verbatim)
 
