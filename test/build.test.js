@@ -52,6 +52,7 @@ test('build.sh with VERSION writes tarball and SHA256SUMS', () => {
     'snail.js',
     'snail.example.toml',
     'build-stamp.json',
+    'src/config.js',
   ]) {
     assert.ok(listing.includes(`${prefix}${name}`), `missing ${name}`);
   }
