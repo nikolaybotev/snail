@@ -36,7 +36,7 @@ A local, scripted IMAP server is started by the tests, and the real imapflow cli
 
 ## Open questions (carried into spec.md)
 
-None. [spec.md](spec.md) chooses the server (D1), the plaintext socket (D2), the IDLE signal (D3), the integers (D4), the notifier checks (D5), and the release tag (D6).
+None. [spec.md](spec.md) chooses the server (D1), the plaintext socket (D2), the IDLE signal (D3), the integers (D4), the notifier checks (D5), the release tag (D6), which failures double the reconnect wait (D7), and the secret length redaction can see (D8).
 
 ## Original prompt (verbatim)
 
