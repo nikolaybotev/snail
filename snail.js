@@ -170,7 +170,23 @@ function createImapFlowClient(account, password) {
     },
     async idle() {
       if (!client) throw new Error('not connected');
-      await client.idle();
+      return new Promise((resolve, reject) => {
+        const onExists = () => {
+          cleanup();
+          resolve();
+        };
+        const onClose = () => {
+          cleanup();
+          reject(new Error('IMAP connection closed'));
+        };
+        const cleanup = () => {
+          client.off('exists', onExists);
+          client.off('close', onClose);
+        };
+        client.once('exists', onExists);
+        client.once('close', onClose);
+        void client.idle().catch(() => {});
+      });
     },
     async logout() {
       try {
