@@ -188,7 +188,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.snail.agent.plist
 
 Logs append to `~/.local/state/snail/log`.
 
-`scripts/run-service.sh` maps Snail exit 2 to exit 0 so launchd does not treat a config error as a crash. Other exits still restart (`KeepAlive` with `SuccessfulExit` false). The agent runs while you are logged into the GUI session.
+`scripts/snail-service.sh` maps Snail exit 2 to exit 0 so launchd does not treat a config error as a crash. Other exits still restart (`KeepAlive` with `SuccessfulExit` false). The agent runs while you are logged into the GUI session.
 
 Unload:
 

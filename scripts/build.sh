@@ -37,7 +37,7 @@ JSON
 
 cp package.json package-lock.json README.md LICENSE snail.js snail.example.toml snail.service "$staging/$top/"
 mkdir -p "$staging/$top/scripts" "$staging/$top/launchd"
-cp scripts/run-service.sh "$staging/$top/scripts/"
+cp scripts/snail-service.sh "$staging/$top/scripts/"
 cp launchd/com.snail.agent.plist "$staging/$top/launchd/"
 cp -r src "$staging/$top/"
 

@@ -19,6 +19,24 @@ const IDLE_KEEPALIVE_MS = 29 * 60 * 1000;
 const CONNECT_INITIAL_BACKOFF_MS = INITIAL_BACKOFF_MS;
 
 /**
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+function coerceImapInteger(value) {
+  if (typeof value === 'number') {
+    return value;
+  }
+  if (typeof value === 'bigint') {
+    const n = Number(value);
+    if (!Number.isSafeInteger(n)) {
+      throw new Error('IMAP integer is not a safe integer');
+    }
+    return n;
+  }
+  return value;
+}
+
+/**
  * @param {string | null | undefined} accountName
  * @param {string} message
  * @param {Iterable<string>} [secrets]
@@ -252,9 +270,20 @@ async function runAccountLoop(ctx) {
       connectBackoff = CONNECT_INITIAL_BACKOFF_MS;
 
       const mb = await imapClient.mailboxOpen(account.mailbox);
-      const state = store.ensureMailboxState(mb.uidValidity, mb.uidNext);
+      const uidValidity = coerceImapInteger(mb.uidValidity);
+      const uidNext = coerceImapInteger(mb.uidNext);
+      const state = store.ensureMailboxState(
+        /** @type {number} */ (uidValidity),
+        /** @type {number} */ (uidNext),
+      );
 
-      await syncMessages(imapClient, store, state, mb.uidNext, reloadHooks());
+      await syncMessages(
+        imapClient,
+        store,
+        state,
+        /** @type {number} */ (uidNext),
+        reloadHooks(),
+      );
 
       if (ctx.stopAfterSync) {
         while (
@@ -303,9 +332,16 @@ async function runAccountLoop(ctx) {
             break;
           }
           const mb2 = await imapClient.mailboxOpen(account.mailbox);
+          const uidNextAfterExists = coerceImapInteger(mb2.uidNext);
           let current = store.readState();
           if (current) {
-            await syncMessages(imapClient, store, current, mb2.uidNext, reloadHooks());
+            await syncMessages(
+              imapClient,
+              store,
+              current,
+              /** @type {number} */ (uidNextAfterExists),
+              reloadHooks(),
+            );
           }
           if (reloadState?.pending && !renameInProgress.value) {
             break;
@@ -764,6 +800,7 @@ function createFakeImapClient(options = {}) {
 
 module.exports = {
   IDLE_KEEPALIVE_MS,
+  coerceImapInteger,
   formatLogLine,
   removeLeftoverTmpFiles,
   uidsToSync,

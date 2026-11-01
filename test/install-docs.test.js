@@ -59,7 +59,7 @@ test('AC13: LaunchAgent runs in GUI session with exit-2 wrapper', () => {
     plist,
     /<key>SuccessfulExit<\/key>\s*\n\s*<false\/>/,
   );
-  assert.match(plist, /run-service\.sh/);
+  assert.match(plist, /snail-service\.sh/);
   assert.match(
     plist,
     /\/ABS\/PATH\/TO\/HOME\/\.config\/snail\/config\.toml/,
@@ -67,11 +67,22 @@ test('AC13: LaunchAgent runs in GUI session with exit-2 wrapper', () => {
   assertNoForbiddenInstallSecrets(plist, 'com.snail.agent.plist');
 });
 
-test('AC13: run-service.sh maps exit 2 to 0', () => {
-  const sh = read('scripts/run-service.sh');
+test('AC13: snail-service.sh maps exit 2 to 0', () => {
+  const sh = read('scripts/snail-service.sh');
   assert.match(sh, /-eq 2/);
   assert.match(sh, /exit 0/);
-  assertNoForbiddenInstallSecrets(sh, 'run-service.sh');
+  assertNoForbiddenInstallSecrets(sh, 'snail-service.sh');
+});
+
+test('AC4: service wrapper name in unit, README, and tree', () => {
+  const unit = read('snail.service');
+  assert.match(unit, /snail-service\.sh/);
+  assert.doesNotMatch(unit, /run-service\.sh/);
+  const readme = read('README.md');
+  assert.match(readme, /snail-service\.sh/);
+  assert.doesNotMatch(readme, /run-service\.sh/);
+  assert.ok(fs.existsSync(path.join(root, 'scripts', 'snail-service.sh')));
+  assert.ok(!fs.existsSync(path.join(root, 'scripts', 'run-service.sh')));
 });
 
 test('AC13: README install paths use placeholders only', () => {

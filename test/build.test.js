@@ -52,13 +52,18 @@ test('build.sh with VERSION writes tarball and SHA256SUMS', () => {
     'snail.js',
     'snail.example.toml',
     'snail.service',
-    'scripts/run-service.sh',
+    'scripts/snail-service.sh',
     'launchd/com.snail.agent.plist',
     'build-stamp.json',
     'src/config.js',
   ]) {
     assert.ok(listing.includes(`${prefix}${name}`), `missing ${name}`);
   }
+
+  assert.ok(
+    !listing.some((line) => line.includes('run-service.sh')),
+    'tarball must not contain run-service.sh',
+  );
 
   assert.ok(
     !listing.some((line) => line.includes('node_modules')),

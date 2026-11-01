@@ -7,7 +7,7 @@ const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 
 const { USAGE, loadSnailConfig } = require('./src/config.js');
-const { startSupervisor } = require('./src/supervisor.js');
+const { startSupervisor, coerceImapInteger } = require('./src/supervisor.js');
 
 const NODE_MAJOR_REQUIRED = 26;
 
@@ -134,7 +134,10 @@ function createImapFlowClient(account, password) {
     async mailboxOpen(mailbox) {
       if (!client) throw new Error('not connected');
       const box = await client.mailboxOpen(mailbox);
-      return { uidValidity: box.uidValidity, uidNext: box.uidNext };
+      return {
+        uidValidity: coerceImapInteger(box.uidValidity),
+        uidNext: coerceImapInteger(box.uidNext),
+      };
     },
     async fetchOne(uid) {
       if (!client) throw new Error('not connected');
