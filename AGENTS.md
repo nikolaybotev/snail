@@ -48,4 +48,4 @@ Do not introduce behavior that:
 ## Things agents get wrong
 
 - Treating `package.json` `"version"` as the product version — release version comes from git tags and `VERSION` at build time, not from `"0.0.0"`.
-- The production imapflow client leaves auto-IDLE on. It does not set `disableAutoIdle` or `maxIdleTime`. A test sets `disableAutoIdle` only when that test must hold the IDLE session still.
+- Setting `disableAutoIdle: true` on the imapflow client without `maxIdleTime` under the library’s 5-minute socket timeout — the account loop logs `imap disconnected: Socket timeout` about every 10 minutes while TCP stays up.
