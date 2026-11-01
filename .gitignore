@@ -1,0 +1,4 @@
+node_modules
+snail-config.json
+snail-state.json
+*.log
