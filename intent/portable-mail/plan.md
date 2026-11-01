@@ -10,7 +10,7 @@ Spec wins. Update this file in the same change whenever implementation departs f
 
 This file is the draft. Do not open build pull requests until the build gate below has been run and its findings are in the spec and the plan. Do not merge the pull request that only adds `intent/portable-mail/`.
 
-The first-run cursor is decided in spec D15. The first tagged release secret path is D16. No phase reopens either.
+The first-run cursor is decided in spec D15. Release scope through all phases is D16. No phase reopens either.
 
 ## Models
 
@@ -18,7 +18,7 @@ Fresh-context review of this spec and this plan uses Grok 4.7 High. Every build 
 
 ## Stops
 
-None. Secret handling is D7. The first-run cursor is D15. The first tagged release secret path is D16.
+None. Secret handling is D7. The first-run cursor is D15. Release scope through all phases is D16.
 
 ## Build gate
 
@@ -145,7 +145,7 @@ DoD: `npm test` exits 0.
 Files: `snail.service`, `launchd/com.snail.agent.plist`, `scripts/run-service.sh`, `README.md`, `test/install-docs.test.js`
 
 1. Replace the system unit and the `sudo` install with D8. `Restart=on-failure` and `RestartPreventExitStatus=2`. Example plist label `com.snail.agent`, `LimitLoadToSessionType` `Aqua`, `KeepAlive` `SuccessfulExit` false. `scripts/run-service.sh` exits 0 when node exits 2. Placeholders only: `/ABS/PATH/TO/HOME`, `/ABS/PATH/TO/node`. No LaunchDaemon.
-2. Rewrite `README.md` so a stranger can copy `snail.example.toml` to `~/.config/snail/config.toml`, set mode `0600`, own it as the service user, install the user service on Linux and the LaunchAgent on macOS, and see the saved-message schema. Document live reload, and document D15: a first run and a UIDVALIDITY resync save the mailbox without waking, and a later run wakes mail that arrived during downtime. Document D16: the first tagged release is verified with inline secrets in that mode-`0600` config; Keychain and `op://` are optional best-effort paths per D7, not blockers for the tag. Document D7 in full: Keychain on macOS via `/usr/bin/security`, `op://` ids on Linux, the 1,000-request daily limit and the about-3 versus 1 request costs, inline read-only mailbox passwords as the fallback, the token only in the `op` child's environment, read from `SNAIL_OP_TOKEN_FILE` or `$CREDENTIALS_DIRECTORY/op-token`, and the same-user threat note from D7. Show `security add-generic-password` with `-w` last and no secret after it. Do not show `-w` followed by a secret, and do not show `-A`. Say the service runs while that user is logged in, and that exit 2 does not restart.
+2. Rewrite `README.md` so a stranger can copy `snail.example.toml` to `~/.config/snail/config.toml`, set mode `0600`, own it as the service user, install the user service on Linux and the LaunchAgent on macOS, and see the saved-message schema. Document live reload, and document D15: a first run and a UIDVALIDITY resync save the mailbox without waking, and a later run wakes mail that arrived during downtime. Document D16: the release that completes this plan includes every phase, inline secrets in that mode-`0600` config, and the `keychain://` and `op://` paths from D7. Document D7 in full: Keychain on macOS via `/usr/bin/security`, `op://` ids on Linux, the 1,000-request daily limit and the about-3 versus 1 request costs, inline read-only mailbox passwords as the fallback, the token only in the `op` child's environment, read from `SNAIL_OP_TOKEN_FILE` or `$CREDENTIALS_DIRECTORY/op-token`, and the same-user threat note from D7. Show `security add-generic-password` with `-w` last and no secret after it. Do not show `-w` followed by a secret, and do not show `-A`. Say the service runs while that user is logged in, and that exit 2 does not restart.
 3. Add the unit, the plist, and `scripts/run-service.sh` to the `scripts/build.sh` member list. Assert the archive contains those files, `snail.example.toml`, `README.md`, `LICENSE`, `package.json`, `package-lock.json`, and `build-stamp.json`, and does not contain `node_modules` or `.git`.
 4. Tests cover AC13. Assert the unit and plist contain `--config`, `RestartPreventExitStatus=2` or the wrapper's exit-2 mapping, and no `sudo`, no token, and no secret literal. The example TOML may contain `REPLACE-WITH-` placeholders.
 
@@ -157,7 +157,7 @@ Files: `.github/workflows/release.yml`, `scripts/release-version.sh`, `test/rele
 
 1. Implement D10. The workflow runs on push to the default branch, job name `publish`, `timeout-minutes: 15`, `ubuntu-latest`. It does not run on pull requests.
 2. Tests cover AC15, including the first tag `v0.1.0`, patch, minor, major, both labels, and `noop` when HEAD is already tagged. A fixture whose subject does not end with `(#N)` exits non-zero and does not print a tag. Label lookup is injectable so the test does not call the network.
-3. Do not push a tag from the build pull request. The workflow pushes the tag only on the default branch, after a green build of that commit. The first tag does not wait on Keychain or `op` succeeding in CI (D16).
+3. Do not push a tag from the build pull request. The workflow pushes the tag only on the default branch, after a green build of that commit.
 
 DoD: `npm test` exits 0.
 
