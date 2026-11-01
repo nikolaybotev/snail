@@ -30,7 +30,7 @@ The mapping runs. A config error does not restart the service. On macOS that is 
 
 ## Open questions (carried into spec.md)
 
-None. [spec.md](spec.md) decides the errexit capture (D1), the systemd split (D2), and the executed check (D3).
+None. [spec.md](spec.md) decides the errexit capture (D1), the systemd split, the pinned `ExecStart`, and the clean-signal rule (D2), and the executed check (D3).
 
 ## Original prompt (verbatim)
 
