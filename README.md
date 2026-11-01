@@ -2,6 +2,8 @@
 
 Snail monitors an IMAP mailbox via IDLE and wakes an OpenClaw agent when new email arrives. New messages are saved to disk as JSON files — the email body never touches the OpenClaw wake payload (prompt injection protection).
 
+Portable-mail requirements (multi-account TOML config, live reload, user services, and release tarball) are specified in `intent/portable-mail/` on branches that include that tree. This README describes the single-account daemon currently in the tree.
+
 ## Architecture
 
 ```
@@ -13,35 +15,36 @@ IMAP Server → IDLE push → Snail → saves mail/YYYY-MM-DD_uid-NNN.json
 ## Setup
 
 ### 1. Install dependencies
+
 ```bash
-cd /path/to/snail
-npm install
+npm ci
 ```
+
+Requires Node.js 26 (`engines` in `package.json`).
 
 ### 2. Create config
+
 ```bash
 cp snail-config.example.json snail-config.json
-nano snail-config.json
 ```
 
-Fill in:
-- `imap.host` — your IMAP server
-- `imap.user` / `imap.pass` — credentials (app password recommended). `op://` references are resolved at startup
-- `gatewayUrl` — OpenClaw gateway (default `http://127.0.0.1:18789`)
-- `gatewayToken` — OpenClaw gateway token. `op://` references are resolved at startup
+Edit `snail-config.json` with IMAP credentials and OpenClaw gateway settings (see the example file).
 
 ### 3. Test run
+
 ```bash
 node snail.js
 ```
 
-### 4. Install as systemd service
+### 4. Install as systemd service (imported example)
+
+The checked-in `snail.service` is a system-wide unit example. Portable mail replaces this with a user-level unit; see `intent/portable-mail/spec.md` when that work lands.
+
 ```bash
 sudo cp snail.service /etc/systemd/system/snail.service
 sudo systemctl daemon-reload
 sudo systemctl enable snail
 sudo systemctl start snail
-sudo journalctl -u snail -f
 ```
 
 ## Files
@@ -52,14 +55,13 @@ sudo journalctl -u snail -f
 | `snail-config.json` | Your config (gitignored) |
 | `snail-config.example.json` | Template |
 | `snail-state.json` | Last-seen UID (auto-managed) |
-| `snail.service` | systemd unit file |
+| `snail.service` | systemd unit file (legacy system-wide example) |
 | `../mail/` | Saved email JSON files |
 
 ## Security
 
 - Email body is **never** included in the OpenClaw wake payload — only a file path
-- This prevents prompt injection attacks via malicious email content
-- Keep `snail-config.json` out of version control. `op://` references in it are resolved at startup
+- Keep `snail-config.json` out of version control
 
 ## Reconnect behavior
 
