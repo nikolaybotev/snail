@@ -3,8 +3,10 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
+
+/** imapflow socket inactivity default is 5 minutes; refresh IDLE one minute earlier. */
+const IDLE_REFRESH_MS = 4 * 60 * 1000;
 
 const { USAGE, loadSnailConfig } = require('./src/config.js');
 const { startSupervisor, coerceImapInteger } = require('./src/supervisor.js');
@@ -113,8 +115,9 @@ function assertCleanArgv(configPath) {
 /**
  * @param {import('./src/config.js').SnailConfig['accounts'][0]} account
  * @param {string} password
+ * @param {{ maxIdleTime?: number | false, socketTimeout?: number }} [imapOverrides]
  */
-function createImapFlowClient(account, password) {
+function createImapFlowClient(account, password, imapOverrides) {
   /** @type {import('imapflow').ImapFlow | null} */
   let client = null;
   /** @type {{ cleanup: () => void, reject: (err: Error) => void, cancelled: boolean } | null} */
@@ -123,14 +126,26 @@ function createImapFlowClient(account, password) {
   return {
     id: `imapflow-${account.name}`,
     async connect() {
-      client = new ImapFlow({
+      const { ImapFlow } = require('imapflow');
+      /** @type {import('imapflow').ImapFlowOptions} */
+      const flowOptions = {
         host: account.host,
         port: account.port,
         secure: account.tls === 'on',
         disableAutoIdle: true,
+        maxIdleTime: IDLE_REFRESH_MS,
         auth: { user: account.user, pass: password },
         logger: false,
-      });
+      };
+      if (imapOverrides) {
+        if (Object.prototype.hasOwnProperty.call(imapOverrides, 'maxIdleTime')) {
+          flowOptions.maxIdleTime = imapOverrides.maxIdleTime;
+        }
+        if (Object.prototype.hasOwnProperty.call(imapOverrides, 'socketTimeout')) {
+          flowOptions.socketTimeout = imapOverrides.socketTimeout;
+        }
+      }
+      client = new ImapFlow(flowOptions);
       client.on('error', () => {});
       await client.connect();
     },
@@ -297,5 +312,6 @@ module.exports = {
   requireNodeMajor,
   assertCleanArgv,
   createImapFlowClient,
+  IDLE_REFRESH_MS,
   NODE_MAJOR_REQUIRED,
 };
