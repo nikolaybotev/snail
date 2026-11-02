@@ -213,6 +213,8 @@ async function runAccountLoop(ctx) {
     htmlLimit: account.htmlLimit,
     attachmentLimit: account.attachmentLimit,
     accountName: account.name,
+    mailbox: account.mailbox,
+    accountLog: log,
     fs: ctx.fs,
     log: (line) => ctx.log(line),
     onWake: async (wakeCtx) => {
@@ -244,6 +246,7 @@ async function runAccountLoop(ctx) {
           payload,
           fetchImpl: ctx.fetchImpl,
           sleeper,
+          log,
         });
       } else {
         result = await notifyOpenClawWake({
@@ -261,6 +264,9 @@ async function runAccountLoop(ctx) {
   });
 
   const imapClient = ctx.imapFactory(account, password);
+  if (typeof imapClient.setLog === 'function') {
+    imapClient.setLog(log);
+  }
 
   let connectBackoff = CONNECT_INITIAL_BACKOFF_MS;
 
@@ -283,6 +289,8 @@ async function runAccountLoop(ctx) {
         state,
         /** @type {number} */ (uidNext),
         reloadHooks(),
+        log,
+        account.mailbox,
       );
 
       if (ctx.stopAfterSync) {
@@ -341,6 +349,8 @@ async function runAccountLoop(ctx) {
               current,
               /** @type {number} */ (uidNextAfterExists),
               reloadHooks(),
+              log,
+              account.mailbox,
             );
           }
           if (reloadState?.pending && !renameInProgress.value) {
@@ -393,14 +403,21 @@ async function runAccountLoop(ctx) {
  *   renameInProgress?: { value: boolean },
  * }} [reload]
  */
-async function syncMessages(client, store, state, uidNext, reload) {
+async function syncMessages(client, store, state, uidNext, reload, logFn, mailbox) {
   let current = store.readState() ?? state;
   const uids = uidsToSync(current, uidNext);
+  const encMailbox = encodeURIComponent(mailbox);
   for (const uid of uids) {
     if (reload?.shouldAbortBeforeUid?.()) {
       break;
     }
+    if (logFn) {
+      logFn(`fetch start mailbox ${encMailbox} uid ${uid}`);
+    }
     const msg = await client.fetchOne(uid);
+    if (logFn) {
+      logFn(`fetch end mailbox ${encMailbox} uid ${uid}`);
+    }
     if (!msg) continue;
     await store.saveOneMessage({
       uid,

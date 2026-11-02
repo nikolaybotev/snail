@@ -159,7 +159,7 @@ async function idleTestSleeper(ms) {
     },
   });
 
-  liveImap.emit('exists');
+  liveImap.emit('exists', { path: 'INBOX', count: 1, prevCount: 0 });
 
   await waitFor(() => notifyCalls === 1);
   await waitFor(() =>

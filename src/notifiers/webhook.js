@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const { notifyWithRetries, defaultSleeper } = require('./retry.js');
 
 const WEBHOOK_PAYLOAD_KEYS = [
@@ -57,6 +58,9 @@ function isWebhookSuccess(res) {
  *   fetchImpl?: typeof fetch,
  *   sleeper?: (ms: number) => Promise<void>,
  *   attemptTimeoutMs?: number,
+ *   log?: (msg: string) => void,
+ *   requestId?: string,
+ *   now?: () => number,
  * }} options
  * @returns {Promise<{ ok: boolean, attempts: number }>}
  */
@@ -69,18 +73,31 @@ async function notifyWebhook({
   fetchImpl = fetch,
   sleeper = defaultSleeper,
   attemptTimeoutMs = WEBHOOK_ATTEMPT_TIMEOUT_MS,
+  log,
+  requestId: injectedRequestId,
+  now = Date.now,
 }) {
   const headerName = webhookHeader;
   const headerValue =
     webhookAuth === 'raw' ? secret : `Bearer ${secret}`;
+  const requestId = injectedRequestId ?? crypto.randomUUID();
+  const encMailbox = encodeURIComponent(payload.mailbox);
+  const uid = payload.uid;
+  let attemptNumber = 0;
 
   const attempt = async () => {
+    attemptNumber += 1;
+    const n = attemptNumber;
+    if (log) {
+      log(`webhook start mailbox ${encMailbox} uid ${uid} request ${requestId} attempt ${n}`);
+    }
     let timedOut = false;
     const timeoutPromise = sleeper(attemptTimeoutMs).then(() => {
       timedOut = true;
       return /** @type {Response | null} */ (null);
     });
 
+    const startedAt = now();
     try {
       const res = await Promise.race([
         fetchImpl(webhookUrl, {
@@ -97,6 +114,12 @@ async function notifyWebhook({
 
       if (timedOut || res === null) {
         return false;
+      }
+      const durationMs = now() - startedAt;
+      if (log) {
+        log(
+          `webhook response mailbox ${encMailbox} uid ${uid} request ${requestId} attempt ${n} status ${res.status} duration ${durationMs}`,
+        );
       }
       if (REDIRECT_STATUSES.has(res.status)) {
         return false;
