@@ -10,12 +10,75 @@ const {
   parseOpReference,
   isInlineSecret,
   keychainExecArgs,
+  defaultKeychainRunner,
   readOpServiceAccountToken,
   redactKnownSecrets,
   createAccountSecretResolver,
   INITIAL_BACKOFF_MS,
   MAX_BACKOFF_MS,
 } = require('../src/secrets.js');
+
+test('AC1: keychainExecArgs returns security binary and find-generic-password argv', () => {
+  const { file, args } = keychainExecArgs('my-service', 'my-account');
+  assert.equal(file, '/usr/bin/security');
+  assert.deepEqual(args, [
+    'find-generic-password',
+    '-s',
+    'my-service',
+    '-a',
+    'my-account',
+    '-w',
+  ]);
+});
+
+test('AC2: defaultKeychainRunner calls exec with options and trims stdout', async () => {
+  const secret = 'secret-value';
+  let callCount = 0;
+  /** @type {[string, string[], object] | null} */
+  let lastCall = null;
+  const execImpl = async (file, args, options) => {
+    callCount += 1;
+    lastCall = [file, args, options];
+    return { stdout: `${secret}\n` };
+  };
+  const result = await defaultKeychainRunner('my-service', 'my-account', execImpl);
+  assert.equal(result, secret);
+  assert.equal(callCount, 1);
+  assert.ok(lastCall);
+  assert.equal(lastCall[0], '/usr/bin/security');
+  assert.deepEqual(lastCall[1], [
+    'find-generic-password',
+    '-s',
+    'my-service',
+    '-a',
+    'my-account',
+    '-w',
+  ]);
+  assert.deepEqual(lastCall[2], { encoding: 'utf8', maxBuffer: 1048576 });
+  assert.equal('shell' in lastCall[2], false);
+  for (const part of lastCall[1]) {
+    assert.doesNotMatch(part, new RegExp(secret));
+  }
+});
+
+test('AC3: secrets.js uses execFileAsync default and no native keychain modules', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'secrets.js'), 'utf8');
+  assert.match(src, /const \{ execFile \} = require\('node:child_process'\)/);
+  assert.match(src, /const execFileAsync = promisify\(execFile\)/);
+  assert.match(
+    src,
+    /defaultKeychainRunner\(service, account, execImpl = execFileAsync\)/,
+  );
+  assert.doesNotMatch(src, /\bexec\s*\(/);
+  assert.doesNotMatch(src, /\bshell\s*:/);
+  const pkg = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'),
+  );
+  assert.equal('keytar' in (pkg.dependencies ?? {}), false);
+  assert.equal('keytar' in (pkg.devDependencies ?? {}), false);
+  assert.equal('@napi-rs/keyring' in (pkg.dependencies ?? {}), false);
+  assert.equal('@napi-rs/keyring' in (pkg.devDependencies ?? {}), false);
+});
 
 test('AC10: inline value is not a reference', () => {
   assert.equal(isInlineSecret('plain-password'), true);

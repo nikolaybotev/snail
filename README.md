@@ -143,7 +143,7 @@ Snail passes the token only to the `op` child as `OP_SERVICE_ACCOUNT_TOKEN` (wit
 
 ### Threat model note
 
-Against same-user malware, Keychain, `op://`, and a mode-`0600` config file are roughly similar. Keychain and 1Password help with encryption at rest and keeping secrets out of backups and plain files. Snail never logs secrets, never puts them on argv, and never writes them into files it creates.
+Against same-user malware, Keychain, `op://`, and a mode-`0600` config file are roughly similar. The Keychain's value is encryption at rest and keeping the secret out of backups and plain files. Snail never logs secrets, never puts them on argv, and never writes them into files it creates.
 
 ## User service (Linux)
 
