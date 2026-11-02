@@ -22,13 +22,15 @@ The phase adds six new log lines and leaves the timestamp format of every existi
 1. One line when an IDLE `exists` event wakes Snail, before the mailbox is reopened and before any fetch.
 2. One line when that message's fetch starts.
 3. One line when that fetch finishes, before the message file write.
-4. One line for the message file write itself.
+4. One line for the message file write itself, after `renameSync` returns and before `onWake`. A thrown `renameSync` does not leave that line behind.
 5. One line when a webhook request starts.
 6. One line when that attempt's HTTP response arrives, with the status and the duration in milliseconds.
 
 Both webhook lines carry the mailbox, the uid, a generated request id, and the attempt number. Retries share that id. The response line also carries the HTTP status and the duration in whole milliseconds. The id is generated for that wake. It is not derived from a secret or from personal data.
 
 Fetch start, fetch end, and the file write already share the mailbox and the uid. `syncMessages` finishes one uid before the next, so those three lines correlate without a second id.
+
+Mailbox and path are written with `encodeURIComponent`. A space is `%20`, so the next field stays its own token. `uid` is not blurred into the mailbox.
 
 Each webhook attempt gets a start line. Each attempt whose HTTP response arrives gets a response line. A retry is timed on its own, not only the last attempt. A timeout or a thrown request has the start line and no response line.
 
@@ -39,8 +41,8 @@ The new lines use the timestamp prefix the existing lines already use. The phase
 Checked 2026-11-02 on `v0.1.8` (`46c1b0fc2527063b05386ce3c2bf94d21bbb09f2`):
 
 - `formatLogLine` sets the prefix with `new Date().toISOString()` (`src/supervisor.js`). `notify ok` and `notify failed` go through that function as `notify ok uid <uid> attempts <n>` (and the failed sibling) under `[snail] [<account>]`. `imap disconnected` uses the same function. `starting` calls `new Date().toISOString()` directly (`snail.js`). `test/supervisor.test.js` already requires the prefix `YYYY-MM-DDTHH:mm:ss.sssZ`. That call already prints millisecond precision. The phase does not change it.
-- imapflow 1.7.8 `untaggedExists` emits `exists` with `path`, `count`, and `prevCount`. The object has no uid. The IDLE listener in `snail.js` takes no argument and resolves with none. `raceIdle` turns that resolution into the string `exists`. The uid list is computed later from mailbox state and `uidNext` inside `syncMessages`.
-- `syncMessages` calls `fetchOne` per uid, then `saveOneMessage`. The message file write is `writeFileSync` of that message's JSON. The rename that makes the file durable stays after that write. A fetch that returns nothing, and a save that finds the file already present, do not write.
+- imapflow 1.7.8 `untaggedExists` emits `exists` with `path`, `count`, and `prevCount`. The object has no uid. The IDLE listener in `snail.js` takes no argument and resolves with none. `test/idle-exists-runner.js` emits `exists` with no argument. `raceIdle` turns that resolution into the string `exists`. The uid list is computed later from mailbox state and `uidNext` inside `syncMessages`.
+- `syncMessages` calls `fetchOne` per uid, then `saveOneMessage`. The message JSON is written with `writeFileSync`, then `renameSync` makes the file appear, then `onWake` runs. A fetch that returns nothing, and a save that finds the file already present, do not write.
 - `notifyWebhook` posts inside `notifyWithRetries`. The first attempt is immediate. Five more follow delays of 1s, 2s, 4s, 8s, and 16s. Each attempt races the post with a 10s timeout. The supervisor calls `notifyWebhook` for the webhook notifier only, then logs `notify ok` or `notify failed`.
 
 With neither `release:minor` nor `release:major`, the squash merge that contains this phase publishes `v0.1.9`.
@@ -54,12 +56,13 @@ With neither `release:minor` nor `release:major`, the squash merge that contains
 
 - The decision is closed. The change is the four message lines already specified, plus the webhook start line and the webhook response line. The timestamp format of every existing line stays, including `notify ok`, `starting`, and `imap disconnected`. The four message lines stay as specified.
 - Each new per-message line uses the `notify ok` shape: the existing `new Date().toISOString()` prefix, `[snail] [<account>]`, and `uid <n>`. It also names the mailbox the account has open. `notify ok` carries the account and `uid <n>`. The mailbox is absent from that line. The new lines add the mailbox in that same line.
-- The `exists` line uses that same prefix and names that mailbox. It also includes the event fields the library actually emits: `path`, `count`, and `prevCount`. It has no uid. `uidNext` and any uid computed after the wake are not a substitute for an event uid.
+- The `exists` line uses that same prefix and names that mailbox. It includes `path`, `count`, and `prevCount` only when the event has that field. It has no uid. `uidNext` and any uid computed after the wake are not a substitute for an event uid. The existing cleanup and `resolve()` run whether or not those fields are present. `test/idle-exists-runner.js` emits `{ path, count, prevCount }`. Wake and IDLE behavior stay as they are.
+- Mailbox and path on every new line are `encodeURIComponent` of the raw string. A space is `%20`. The other fields stay bare tokens separated by one space.
 - Fetch start, fetch finish, and the message file write each carry the mailbox and the uid of the message being fetched or written. One `exists` wake can be followed by more than one uid. Each uid gets its own fetch start, fetch finish, and, when the file is written, its own write line. Those three lines correlate by mailbox and uid. They do not get a request id.
 - The new lines omit the message body, the subject, addresses, and secrets. The webhook lines also omit the URL, the request body, and response headers.
-- Webhook start and webhook response use that same prefix and the same `mailbox` and `uid` form as the fetch lines. Both carry `request <id>` and `attempt <n>`. The id is one `crypto.randomUUID()` per wake, shared by that wake's retries. The attempt number starts at 1. The response line also carries `status <status>` and `duration <ms>`. Every attempt is logged, including a retry. Openclaw does not gain these lines.
+- Webhook start and webhook response use that same prefix and the same `mailbox` and `uid` form as the fetch lines. Both carry `request <id>` and `attempt <n>`. The id is one `crypto.randomUUID()` per wake, shared by that wake's retries. The attempt number starts at 1. The response line also carries `status <status>` and `duration <ms>`. Every attempt is logged, including a retry. The live webhook lines match that text aside from the generated id. The webhook secret sentinel is `webhook-secret-token`. The password sentinel stays `secret-token`. Openclaw does not gain these lines.
 - The `exists` line is only the IDLE wake. Catch-up does not emit it. Catch-up does emit the fetch and write lines, because those are the same calls.
-- The write line is the message JSON write, not the state file and not a skipped save.
+- The write line is logged after `renameSync` returns and before `onWake`. It is not the state file and not a skipped save. A thrown `renameSync` does not log it.
 - This pull request starts as this file. The phase content is added here before any merge: [spec.md](spec.md), [plan.md](plan.md), and the log change with its test. The pull request stays open until that content is in it. It is not closed. Checked 2026-11-02: `v0.1.8` is `46c1b0fc2527063b05386ce3c2bf94d21bbb09f2` on the default branch. `.github/workflows/release.yml` runs on every push to `main`. `scripts/release-version.sh` patch-bumps a squash merge that has neither `release:minor` nor `release:major`, so merging this file alone would publish `v0.1.9` without the log lines.
 - This is a new intent. Other intent folders stay as they are.
 - No deploy. Nothing is installed.
@@ -125,3 +128,13 @@ Follow-up in the same conversation:
 > Do not change existing timestamp formats. Follow the private notes and do not copy them into the repo. No personal names or real identifiers. No release:minor or release:major.
 >
 > Reply with the commit SHA when intent, spec, and plan all include the request id, the attempt number, and the duration.
+
+Follow-up in the same conversation:
+
+> The file-write log line is after `renameSync` returns and before `onWake`. A thrown `renameSync` must not leave the line behind.
+>
+> Read `path`, `count`, and `prevCount` only when the event has them, and always run the existing cleanup and `resolve()`. The idle-exists runner emits `{ path, count, prevCount }`. Wake and IDLE behavior stay as they are.
+>
+> The live webhook test requires the live lines to match the specified text aside from the generated id. The webhook-secret sentinel is distinct from the password sentinel.
+>
+> Mailbox and path are written with `encodeURIComponent`, so a space is `%20` and cannot blur the next field.
