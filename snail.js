@@ -122,9 +122,14 @@ function createImapFlowClient(account, password, imapOverrides) {
   let client = null;
   /** @type {{ cleanup: () => void, reject: (err: Error) => void, cancelled: boolean } | null} */
   let activeIdleWait = null;
+  /** @type {((msg: string) => void) | null} */
+  let accountLog = null;
 
   return {
     id: `imapflow-${account.name}`,
+    setLog(fn) {
+      accountLog = fn;
+    },
     async connect() {
       const { ImapFlow } = require('imapflow');
       /** @type {import('imapflow').ImapFlowOptions} */
@@ -198,8 +203,27 @@ function createImapFlowClient(account, password, imapOverrides) {
           cleanup: () => {},
           reject,
         };
-        const onExists = () => {
+        const onExists = (event) => {
           if (wait.cancelled) return;
+          if (accountLog) {
+            try {
+              let line = `exists mailbox ${encodeURIComponent(account.mailbox)}`;
+              if (event !== null && event !== undefined && typeof event === 'object') {
+                if (Object.prototype.hasOwnProperty.call(event, 'path')) {
+                  line += ` path ${encodeURIComponent(event.path)}`;
+                }
+                if (Object.prototype.hasOwnProperty.call(event, 'count')) {
+                  line += ` count ${event.count}`;
+                }
+                if (Object.prototype.hasOwnProperty.call(event, 'prevCount')) {
+                  line += ` prevCount ${event.prevCount}`;
+                }
+              }
+              accountLog(line);
+            } catch {
+              /* log failure must not block resolve */
+            }
+          }
           wait.cleanup();
           activeIdleWait = null;
           resolve();

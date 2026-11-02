@@ -293,6 +293,8 @@ function buildMessagePayload(input, mailDir) {
  *   htmlLimit: number,
  *   attachmentLimit: number,
  *   accountName?: string,
+ *   mailbox?: string,
+ *   accountLog?: (msg: string) => void,
  *   fs?: typeof fs,
  *   log?: (line: string) => void,
  *   onWake?: (ctx: { uid: number, path: string, from: string, subject: string }) => Promise<'ok' | 'failed'>,
@@ -302,6 +304,8 @@ function buildMessagePayload(input, mailDir) {
 function createMailStore(options) {
   const fsImpl = options.fs ?? fs;
   const log = options.log ?? (() => {});
+  const accountLog = options.accountLog;
+  const mailboxName = options.mailbox;
   const onWake = options.onWake ?? (async () => 'ok');
   const now = options.now ?? (() => new Date());
   const mailDir = options.mailDir;
@@ -415,6 +419,9 @@ function createMailStore(options) {
     try {
       fsImpl.writeFileSync(tmpPath, JSON.stringify(built.record, null, 2), { mode: 0o600 });
       fsImpl.renameSync(tmpPath, finalPath);
+      if (accountLog && mailboxName !== undefined) {
+        accountLog(`file write mailbox ${encodeURIComponent(mailboxName)} uid ${msg.uid}`);
+      }
       msg.onRenamed?.();
     } catch (err) {
       try {
