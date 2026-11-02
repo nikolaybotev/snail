@@ -167,3 +167,80 @@ test('AC13: README install paths use placeholders only', () => {
   assert.match(readme, /op:\/\//);
   assert.doesNotMatch(readme, /\bsudo\b/);
 });
+
+test('AC4: README threat note keeps three-way comparison and Keychain at-rest sentence', () => {
+  const readme = read('README.md');
+  assert.match(
+    readme,
+    /Against same-user malware, Keychain, `op:\/\/`, and a mode-`0600` config file are roughly similar\./,
+  );
+  assert.match(
+    readme,
+    /The Keychain's value is encryption at rest and keeping the secret out of backups and plain files\./,
+  );
+  assert.match(
+    readme,
+    /Snail never logs secrets, never puts them on argv, and never writes them into files it creates\./,
+  );
+  assert.doesNotMatch(
+    readme,
+    /Keychain and 1Password help with encryption at rest/,
+  );
+});
+
+test('AC5: README and example toml document keychain preference and add command', () => {
+  const readme = read('README.md');
+  const example = read('snail.example.toml');
+  assert.match(
+    readme,
+    /security add-generic-password -s snail -a personal-imap -w/,
+  );
+  assert.match(example, /password = "REPLACE-WITH-MAILBOX-PASSWORD"/);
+  assert.match(example, /password = "keychain:\/\/snail\/personal-imap"/);
+  assert.doesNotMatch(readme, /-A\b/);
+  assert.doesNotMatch(example, /-A\b/);
+  for (const line of readme.split('\n')) {
+    assert.doesNotMatch(line, /-w\s+\S/, `README line must not put secret after -w: ${line}`);
+  }
+  for (const line of example.split('\n')) {
+    assert.doesNotMatch(line, /-w\s+\S/, `example line: ${line}`);
+  }
+  const lines = example.split('\n');
+  assert.equal(
+    lines[0],
+    '# Example only. Copy to ~/.config/snail/config.toml, mode 0600, owned by the service user.',
+  );
+  assert.equal(lines[1], '# Replace placeholders. Do not commit the real file.');
+  assert.equal(
+    lines[2],
+    '# Inline values are the fallback. Prefer keychain:// on macOS and op:// on Linux.',
+  );
+});
+
+test('AC6: every plist limits load to GUI Aqua session', () => {
+  /** @param {string} dir */
+  function listPlists(dir) {
+    /** @type {string[]} */
+    const out = [];
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        out.push(...listPlists(full));
+      } else if (ent.isFile() && ent.name.endsWith('.plist')) {
+        out.push(full);
+      }
+    }
+    return out;
+  }
+  const plists = listPlists(root);
+  assert.ok(plists.length >= 1);
+  assert.ok(
+    plists.some((p) => p.endsWith(path.join('launchd', 'com.snail.agent.plist'))),
+  );
+  const pattern =
+    /<key>LimitLoadToSessionType<\/key>\s*\n\s*<string>Aqua<\/string>/;
+  for (const plistPath of plists) {
+    const text = fs.readFileSync(plistPath, 'utf8');
+    assert.match(text, pattern, plistPath);
+  }
+});
