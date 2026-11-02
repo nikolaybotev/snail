@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Derived from | [intent.md](intent.md) (2026-11-01) |
-| Status | Draft 1 |
+| Status | Draft 2 |
 | Stage | 2 · Design |
 
 ## 1. Summary
@@ -50,10 +50,10 @@ The mode-`0600` inline value stays the fallback on both operating systems. Linux
 
 - FR1. `keychainExecArgs` returns file `/usr/bin/security` and args `find-generic-password`, `-s`, the service, `-a`, the account, `-w`. The test asserts the file and the args.
 - FR2. `defaultKeychainRunner` calls its exec implementation with that file, that args list, and the options object `{ encoding: 'utf8', maxBuffer: 1048576 }`. That object has no `shell` property. Stdout `'secret-value\n'` is returned as `'secret-value'`. The secret is not an argument. The test injects the exec implementation and does not spawn `/usr/bin/security`.
-- FR3. `src/secrets.js` imports `execFile` from `node:child_process` and uses it as the default exec implementation. The file does not call `exec(` and does not set `shell`. `package.json` `dependencies` and `devDependencies` do not include `keytar` or `@napi-rs/keyring`.
+- FR3. `src/secrets.js` imports `execFile` from `node:child_process`. `execFileAsync` is `promisify(execFile)`. `defaultKeychainRunner`'s default third parameter is `execFileAsync`. The file does not call `exec(` and does not set `shell`. `package.json` `dependencies` and `devDependencies` do not include `keytar` or `@napi-rs/keyring`.
 - FR4. In `README.md`, the threat note's first sentence stays: "Against same-user malware, Keychain, `op://`, and a mode-`0600` config file are roughly similar." The next sentence becomes: "The Keychain's value is encryption at rest and keeping the secret out of backups and plain files." The sentence "Keychain and 1Password help with encryption at rest and keeping secrets out of backups and plain files." is removed. The sentence "Snail never logs secrets, never puts them on argv, and never writes them into files it creates." stays.
-- FR5. `README.md` keeps this add command, with `-w` last and no value after it: `security add-generic-password -s snail -a personal-imap -w`. It keeps "Do not put the password on the command line after `-w`." and "`op://` is for Linux; the macOS docs path is Keychain, not 1Password references." `README.md` and `snail.example.toml` contain no `-A` flag and no `-w` followed by a token. `snail.example.toml` keeps the line "Inline values are the fallback. Prefer keychain:// on macOS and op:// on Linux." It keeps `password = "REPLACE-WITH-MAILBOX-PASSWORD"` and `password = "keychain://snail/personal-imap"`.
-- FR6. `launchd/com.snail.agent.plist` stays a LaunchAgent with `LimitLoadToSessionType` `Aqua`. This phase does not edit it. The tree gains no LaunchDaemon plist.
+- FR5. `README.md` keeps this add command, with `-w` last and no value after it: `security add-generic-password -s snail -a personal-imap -w`. It keeps "Do not put the password on the command line after `-w`." and "`op://` is for Linux; the macOS docs path is Keychain, not 1Password references." `README.md` and `snail.example.toml` contain no `-A` flag and no `-w` followed by a token. In `snail.example.toml` the preference sentence is the third comment line: "Inline values are the fallback. Prefer keychain:// on macOS and op:// on Linux." The first comment line is the copy-to header. The second says not to commit the real file. The file keeps `password = "REPLACE-WITH-MAILBOX-PASSWORD"` and `password = "keychain://snail/personal-imap"`.
+- FR6. Every `*.plist` in the tree contains `LimitLoadToSessionType` with the value `Aqua`. `launchd/com.snail.agent.plist` is one of those files. This phase does not edit it.
 - FR7. This phase does not change resolver behavior. `createAccountSecretResolver`, `op://`, the in-memory cache, and the 5-second-to-60-second backoff stay as they are on `v0.1.7`. No new reference form is added.
 - FR8. This phase does not install software, create a keychain item, spawn `/usr/bin/security` or `op`, or edit a config outside the repo. The unattended add, find, and delete proof stays outside the repo and is not repeated here.
 
@@ -63,10 +63,10 @@ The mode-`0600` inline value stays the fallback on both operating systems. Linux
 |---|---|
 | AC1 | `npm test` calls `keychainExecArgs('my-service', 'my-account')` and requires `file` `/usr/bin/security` and args `['find-generic-password', '-s', 'my-service', '-a', 'my-account', '-w']`. |
 | AC2 | The same test calls `defaultKeychainRunner` with an injected exec implementation that returns stdout `secret-value\n`. The implementation is called once with `/usr/bin/security`, the AC1 args, and `{ encoding: 'utf8', maxBuffer: 1048576 }`. The returned string is `secret-value`. The args do not contain that string. |
-| AC3 | The same test reads `src/secrets.js` and finds `execFile` imported from `node:child_process`. The source does not call `exec(` and does not set `shell`. `package.json` dependencies and devDependencies do not include `keytar` or `@napi-rs/keyring`. |
+| AC3 | The same test reads `src/secrets.js` and requires `execFile` imported from `node:child_process`, `execFileAsync` assigned `promisify(execFile)`, and `defaultKeychainRunner`'s default third parameter `execFileAsync`. The source does not call `exec(` and does not set `shell`. `package.json` dependencies and devDependencies do not include `keytar` or `@napi-rs/keyring`. |
 | AC4 | The same test reads `README.md` and finds the FR4 first sentence unchanged, the FR4 second sentence in place of the Keychain-and-1Password sentence, and the unchanged "never logs secrets" sentence. |
-| AC5 | The same test reads `README.md` and `snail.example.toml` and finds the FR5 command, the preference line, both password examples, no `-A` flag, and no `-w` followed by a token. |
-| AC6 | The same test reads `launchd/com.snail.agent.plist` and finds `LimitLoadToSessionType` `Aqua`. No plist in the tree is a LaunchDaemon. |
+| AC5 | The same test reads `README.md` and `snail.example.toml` and finds the FR5 command, both password examples, no `-A` flag, and no `-w` followed by a token. The preference sentence is the third comment line of `snail.example.toml`. The first two comment lines stay the copy-to header and the do-not-commit line. |
+| AC6 | The same test requires every `*.plist` in the tree to contain `LimitLoadToSessionType` with the value `Aqua`. `launchd/com.snail.agent.plist` is one of those files. |
 
 `npm test` is `node --test`. Healthy: exit 0. AC1 through AC3 live in `test/secrets.test.js`. AC4 through AC6 live in `test/install-docs.test.js`. Both files run in that command. Existing tests in those files stay.
 
@@ -74,7 +74,7 @@ The mode-`0600` inline value stays the fallback on both operating systems. Linux
 
 **D1 — Lock the existing runner. Do not replace it.** Checked 2026-11-02. On this branch, `src/secrets.js`, `README.md`, `snail.example.toml`, `package.json`, `launchd/com.snail.agent.plist`, `test/secrets.test.js`, and `test/install-docs.test.js` match `v0.1.7` (`50ac3f21a8ab568d813d8c5dcc93a4ed107990f5`). `keychainExecArgs` returns file `/usr/bin/security` and args `find-generic-password`, `-s`, service, `-a`, account, `-w`. `defaultKeychainRunner(service, account, execImpl = execFileAsync)` calls `execImpl(file, args, { encoding: 'utf8', maxBuffer: 1024 * 1024 })` and returns `stdout.replace(/\n$/, '')`. `1024 * 1024` is 1048576, the `maxBuffer` value in the FR2 options object. `execFileAsync` is `promisify(execFile)` from `node:child_process`. The current args test destructures `args` only, so a change of binary would still pass. `package.json` depends on `imapflow`, `mailparser`, `ws`, and devDependency `imapkit`.
 
-The new test injects `execImpl`. It does not spawn `/usr/bin/security`. The resolver's parse, cache, backoff, and Linux rejection tests stay. This phase does not edit `src/secrets.js`.
+The new test injects `execImpl` for AC2, so that call does not use the default. AC3 requires the default: `execFileAsync` is `promisify(execFile)`, and `defaultKeychainRunner`'s default third parameter is `execFileAsync`. A later `promisify(exec)` default fails AC3. `exec` runs through a shell. The test does not spawn `/usr/bin/security`. The resolver's parse, cache, backoff, and Linux rejection tests stay. This phase does not edit `src/secrets.js`.
 
 Rejected: a native module, a second secret file, a shell string, and any new reference form.
 
@@ -82,11 +82,11 @@ Rejected: a native module, a second secret file, a shell string, and any new ref
 
 Rejected: rewriting the first sentence, and leaving the at-rest benefit shared with 1Password.
 
-**D3 — Preference and `-w` are already written. Tests lock them.** Checked 2026-11-02. `snail.example.toml` begins with `Inline values are the fallback. Prefer keychain:// on macOS and op:// on Linux.` Its first password is `REPLACE-WITH-MAILBOX-PASSWORD`. Its personal account password is `keychain://snail/personal-imap`. `README.md` shows `security add-generic-password -s snail -a personal-imap -w`, says not to put the password on the command line after `-w`, and says the macOS docs path is Keychain. Neither file shows `-A`. The inline placeholder stays, because the fallback stays. The `keychain://` example stays, because that is the macOS form the docs prefer. This phase adds the tests in AC5. It does not retitle the example or remove either password.
+**D3 — Preference and `-w` are already written. Tests lock them.** Checked 2026-11-02. `snail.example.toml` line 1 is the copy-to header: "Example only. Copy to ~/.config/snail/config.toml, mode 0600, owned by the service user." Line 2 says not to commit the real file. The preference sentence is the third comment line: "Inline values are the fallback. Prefer keychain:// on macOS and op:// on Linux." AC5 finds it there. A check that the file starts with that sentence fails, and moving the line would retitle the header. The header order stays. The first password is `REPLACE-WITH-MAILBOX-PASSWORD`. The personal account password is `keychain://snail/personal-imap`. `README.md` shows `security add-generic-password -s snail -a personal-imap -w`, says not to put the password on the command line after `-w`, and says the macOS docs path is Keychain. Neither file shows `-A`. The inline placeholder stays, because the fallback stays. The `keychain://` example stays, because that is the macOS form the docs prefer. This phase adds the tests in AC5. It does not retitle the example or remove either password.
 
 Rejected: deleting the inline placeholder, documenting `-w` followed by the secret, and documenting `-A`.
 
-**D4 — The service file stays.** `launchd/com.snail.agent.plist` is the GUI LaunchAgent (`LimitLoadToSessionType` `Aqua`). This phase does not edit it and does not add a LaunchDaemon. The outside proof that an unattended user-GUI LaunchAgent completed add, find, and delete through `/usr/bin/security` with no dialog and no timeout is not repeated in CI.
+**D4 — The service file stays.** Every `*.plist` in the tree contains `LimitLoadToSessionType` with the value `Aqua`. `launchd/com.snail.agent.plist` is one of those files. This phase does not edit it. A plist without that key and value fails AC6. The outside proof that an unattended user-GUI LaunchAgent completed add, find, and delete through `/usr/bin/security` with no dialog and no timeout is not repeated in CI.
 
 **D5 — This pull request publishes `v0.1.8` only when the lock is in it.** Checked 2026-11-02. `v0.1.7` points at `50ac3f21a8ab568d813d8c5dcc93a4ed107990f5`. A squash merge to `main` with neither `release:minor` nor `release:major` publishes `v0.1.8`. This spec commit is not that merge. [plan.md](plan.md) and the changes in FR4, AC1, AC2, AC3, AC4, AC5, and AC6 land on this same pull request before a merge. The pull request stays open and is not closed.
 
