@@ -136,6 +136,30 @@ test('AC7: notify-list does not use child_process', () => {
   assert.ok(!src.includes('execFile'));
 });
 
+test('AC8: notify-redeliver --file refuses slash and dot-dot with exit 2', () => {
+  const mailDir = tempDir();
+  persistInitialSnailState(mailDir, 1, 100);
+  const cfgPath = writeConfig(tempDir(), accountToml('work', mailDir));
+  for (const file of ['../evil.json', 'subdir/file.json']) {
+    const r = spawnSync(
+      process.execPath,
+      [
+        path.join(root, 'snail.js'),
+        'notify-redeliver',
+        '--config',
+        cfgPath,
+        '--account',
+        'work',
+        '--file',
+        file,
+      ],
+      { encoding: 'utf8' }
+    );
+    assert.equal(r.status, 2, file);
+    assert.match(r.stderr, /refused: invalid/);
+  }
+});
+
 test('notify-list stdout omits webhook secret', () => {
   const mailDir = tempDir();
   persistInitialSnailState(mailDir, 1, 100);

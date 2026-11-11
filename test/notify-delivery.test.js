@@ -325,6 +325,107 @@ test('AC1: 400 responses advance next_attempt_at by NOTIFY_DELAY_MS', async () =
     assert.equal(after.next_attempt_at, isoFromMs(expectedNext));
     nowMs = expectedNext;
   }
+  {
+    const row = readNotifyLedger(mailDir)[0];
+    upsertNotifyItem(mailDir, { ...row, next_attempt_at: isoFromMs(nowMs) });
+    await delivery.runDueTurn();
+    const after = readNotifyLedger(mailDir)[0];
+    assert.equal(after.attempts, NOTIFY_DELAY_MS.length + 1);
+    assert.equal(after.last_status, '400');
+    const expectedNext = nowMs + 60000;
+    assert.equal(after.next_attempt_at, isoFromMs(expectedNext));
+  }
+  activeWebhookSleeper?.releasePending?.();
+  activeWebhookSleeper = null;
+});
+
+test('failed notify backs off in memory when ledger upsert fails after non-2xx', async () => {
+  const mailDir = tempDir();
+  const fname = 'f.json';
+  fs.writeFileSync(path.join(mailDir, fname), JSON.stringify({ from: 'a@x.com', subject: 'S' }), {
+    mode: 0o600,
+  });
+  const nowMs = 1_000_000;
+  let blockLedgerWrites = false;
+  const fsWrap = {
+    ...fs,
+    writeFileSync(file, data, opts) {
+      if (blockLedgerWrites && String(file).includes('.snail-notify')) {
+        const err = new Error('ENOSPC');
+        err.code = 'ENOSPC';
+        throw err;
+      }
+      return fs.writeFileSync(file, data, opts);
+    },
+    readFileSync: fs.readFileSync.bind(fs),
+    existsSync: fs.existsSync.bind(fs),
+    mkdirSync: fs.mkdirSync.bind(fs),
+    renameSync: fs.renameSync.bind(fs),
+    readdirSync: fs.readdirSync.bind(fs),
+    unlinkSync: fs.unlinkSync.bind(fs),
+  };
+  upsertNotifyItem(mailDir, {
+    notify_id: 'work/1/11',
+    account: 'work',
+    uid: 11,
+    uid_validity: 1,
+    file: fname,
+    attempts: 0,
+    last_status: 'none',
+    next_attempt_at: isoFromMs(nowMs),
+    request_id: 'req-hold',
+  }, fsWrap);
+  let posts = 0;
+  blockLedgerWrites = true;
+  const delivery = createNotifyDelivery({
+    account: baseAccount(mailDir),
+    notifierSecret: 'sec',
+    openclawClient: null,
+    log: () => {},
+    fetchImpl: async () => {
+      posts += 1;
+      return new Response(null, { status: 400 });
+    },
+    sleeper: makeDeliverySleeper(),
+    now: () => nowMs,
+    fs: fsWrap,
+  });
+  await delivery.runDueTurn();
+  assert.equal(posts, 1);
+  await delivery.runDueTurn();
+  assert.equal(posts, 1);
+  activeWebhookSleeper?.releasePending?.();
+  activeWebhookSleeper = null;
+});
+
+test('corrupt ledger and redeliver request does not throw at apply', async () => {
+  const mailDir = tempDir();
+  const fname = '20260101T120000Z_1_0000000100.json';
+  fs.writeFileSync(
+    path.join(mailDir, '.snail-state.json'),
+    JSON.stringify({
+      uidValidity: 1,
+      notifyBoundary: 1,
+      backlogUid: 0,
+      lastUid: 100,
+    }),
+    { mode: 0o600 }
+  );
+  fs.writeFileSync(path.join(mailDir, fname), JSON.stringify({ from: 'a@x.com', subject: 'R' }), {
+    mode: 0o600,
+  });
+  fs.writeFileSync(path.join(mailDir, '.snail-notify.json'), '{ corrupt', { mode: 0o600 });
+  writeRedeliverRequest(mailDir, fname);
+  const delivery = createNotifyDelivery({
+    account: baseAccount(mailDir),
+    notifierSecret: 'sec',
+    openclawClient: null,
+    log: () => {},
+    fetchImpl: async () => new Response('', { status: 200 }),
+    now: () => 0,
+    sleeper: makeDeliverySleeper(),
+  });
+  await assert.doesNotReject(() => delivery.applyRedeliverRequests());
   activeWebhookSleeper?.releasePending?.();
   activeWebhookSleeper = null;
 });

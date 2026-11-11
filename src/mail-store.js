@@ -447,6 +447,18 @@ function createMailStore(options) {
             wakeSubject,
             uid: msg.uid,
             state: prepared.state,
+            newLedgerRow: prepared.newLedgerRow,
+            syncAborted: prepared.syncAborted,
+          };
+        }
+        if (prepared.syncAborted) {
+          return {
+            skipped: true,
+            saved: false,
+            attemptNotify: false,
+            path: existingPath,
+            state: prepared.state,
+            syncAborted: true,
           };
         }
       }
@@ -530,6 +542,16 @@ function createMailStore(options) {
         built.wakeFrom,
         built.wakeSubject
       );
+      if (prepared.syncAborted) {
+        return {
+          skipped: false,
+          saved: true,
+          attemptNotify: false,
+          path: finalPath,
+          state: prepared.state,
+          syncAborted: true,
+        };
+      }
       return {
         skipped: false,
         saved: true,
@@ -540,6 +562,8 @@ function createMailStore(options) {
         wakeSubject: built.wakeSubject,
         uid: msg.uid,
         state: prepared.state,
+        newLedgerRow: prepared.newLedgerRow,
+        syncAborted: false,
       };
     }
 
@@ -556,7 +580,7 @@ function createMailStore(options) {
    */
   function prepareLedgerRow(uid, uidValidity, basename, state, _wakeFrom, _wakeSubject) {
     if (uidValidity !== state.uidValidity) {
-      return { attemptNotify: false, state };
+      return { attemptNotify: false, state, newLedgerRow: false, syncAborted: false };
     }
     try {
       const notifyId = buildNotifyId(accountName, uidValidity, uid);
@@ -619,11 +643,17 @@ function createMailStore(options) {
             if (accountLog) {
               accountLog(`notify failed uid ${uid} attempts 0 status ledger`);
             }
+            return { attemptNotify: false, state, newLedgerRow: false, syncAborted: true };
           }
-          return { attemptNotify: false, state };
+          return { attemptNotify: false, state, newLedgerRow: false, syncAborted: false };
         }
       }
-      return { attemptNotify: true, state: nextState };
+      return {
+        attemptNotify: true,
+        state: nextState,
+        newLedgerRow: isNew,
+        syncAborted: false,
+      };
     } catch {
       const notifyId = buildNotifyId(accountName, uidValidity, uid);
       try {
@@ -649,8 +679,9 @@ function createMailStore(options) {
         if (accountLog) {
           accountLog(`notify failed uid ${uid} attempts 0 status ledger`);
         }
+        return { attemptNotify: false, state, newLedgerRow: false, syncAborted: true };
       }
-      return { attemptNotify: false, state };
+      return { attemptNotify: false, state, newLedgerRow: false, syncAborted: false };
     }
   }
 

@@ -23,6 +23,7 @@ const { notifyWebhookOnce, buildWebhookBody } = require('./notifiers/webhook.js'
 const { notifyOpenClawWakeOnce } = require('./notifiers/openclaw.js');
 const { readSnailState, writeSnailState } = require('./mail-store.js');
 
+/** Poll interval for redeliver request files; not in NOTIFY_DELAY_MS (starts at 1000). */
 const REQUEST_POLL_MS = 900;
 
 /**
@@ -333,6 +334,7 @@ function createNotifyDelivery(ctx) {
       );
       ctx.log(`notify failed uid ${row.uid} attempts ${attemptNum} status ${result.statusToken}`);
     } catch {
+      removalHoldUntil.set(row.notify_id, nextMs);
       ctx.log(`notify failed uid ${row.uid} attempts ${attemptNum} status ledger`);
     }
   }
@@ -526,9 +528,15 @@ function createNotifyDelivery(ctx) {
       } catch {
         /* ignore */
       }
-      const row = readNotifyLedger(mailDir, fsImpl).find(
-        (r) => r.notify_id === buildNotifyId(ctx.account.name, parsed.uidValidity, parsed.uid)
-      );
+      let row;
+      try {
+        row = readNotifyLedger(mailDir, fsImpl).find(
+          (r) => r.notify_id === buildNotifyId(ctx.account.name, parsed.uidValidity, parsed.uid)
+        );
+      } catch {
+        ctx.log(`notify failed uid ${parsed.uid} attempts 0 status ledger`);
+        continue;
+      }
       if (row) {
         await attemptRow(row);
       }

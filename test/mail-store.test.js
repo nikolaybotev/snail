@@ -93,7 +93,7 @@ test('AC17: UID below notifyBoundary is saved and not woken when lastUid is stil
   assert.equal(after.lastUid, 99);
 });
 
-test('AC6: uidValidity change leaves an older ledger row in place', () => {
+test('AC6: uidValidity change keeps ledger row; resync save adds no row', async () => {
   const mailDir = tempMailDir();
   upsertNotifyItem(mailDir, {
     notify_id: 'work/1/55',
@@ -114,10 +114,64 @@ test('AC6: uidValidity change leaves an older ledger row in place', () => {
     accountName: 'work',
   });
   store.ensureMailboxState(2, 60);
+  const resync = await store.saveOneMessage({
+    uid: 10,
+    uidValidity: 1,
+    body: 'resync-under-new-validity',
+    subject: 'resync',
+    from: [{ address: 'a@example.com' }],
+  });
+  assert.equal(resync.attemptNotify, false);
+  assert.equal(resync.saved, true);
   const items = readNotifyLedger(mailDir);
   assert.equal(items.length, 1);
   assert.equal(items[0].notify_id, 'work/1/55');
   assert.equal(items[0].uid_validity, 1);
+  assert.ok(!items.some((r) => r.notify_id === 'work/1/10'));
+});
+
+test('both ledger writes fail: lastUid does not advance past uid', async () => {
+  const mailDir = tempMailDir();
+  let blockNotifyWrites = false;
+  const failFs = {
+    ...fs,
+    writeFileSync(file, data, opts) {
+      if (blockNotifyWrites && String(file).includes('.snail-notify')) {
+        const err = new Error('ENOSPC');
+        err.code = 'ENOSPC';
+        throw err;
+      }
+      return fs.writeFileSync(file, data, opts);
+    },
+    readFileSync: fs.readFileSync.bind(fs),
+    existsSync: fs.existsSync.bind(fs),
+    mkdirSync: fs.mkdirSync.bind(fs),
+    renameSync: fs.renameSync.bind(fs),
+    readdirSync: fs.readdirSync.bind(fs),
+    unlinkSync: fs.unlinkSync.bind(fs),
+  };
+  const store = createMailStore({
+    mailDir,
+    textLimit: 10000,
+    htmlLimit: 100000,
+    attachmentLimit: 10485760,
+    accountName: 'work',
+    fs: failFs,
+  });
+  store.ensureMailboxState(1, 101);
+  const before = readSnailState(mailDir, failFs);
+  blockNotifyWrites = true;
+  const result = await store.saveOneMessage({
+    uid: 101,
+    uidValidity: 1,
+    body: 'ledger-fail',
+    subject: 'S',
+    from: [{ address: 'a@example.com' }],
+  });
+  assert.equal(result.syncAborted, true);
+  assert.equal(result.saved, true);
+  const after = readSnailState(mailDir, failFs);
+  assert.equal(after.lastUid, before.lastUid);
 });
 
 test('AC17: new UID at or above boundary is woken while backlog is in progress', async () => {

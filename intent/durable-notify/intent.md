@@ -48,7 +48,7 @@ Config secrets stay as they are. There is no new secret mechanism.
 - Secrets stay out of argv, logs, and files this program writes. Webhook URLs and header values stay out of the log. No new secret field and no new way to load a secret.
 - One account's retry wait does not block another account.
 - Placeholder examples only. No personal names, emails, hostnames, machine names, or real mailbox names.
-- This pull request is the three files in this folder. It does not implement the delivery change, it does not merge, and it does not publish a release. Checked 2026-11-11: `v0.1.9` is `69555a3a5320f57c4a84f6cb4a236beb22144b39` on the default branch, and `.github/workflows/release.yml` runs on every push to that branch.
+- Pull request `#25` on branch `cursor/durable-notify-4d40` carries this folder and the Phase 1 delivery implementation. Squash-merge that pull request only when required checks `test` and `javascript` have succeeded; that merge publishes the next patch release (D8). Checked 2026-11-11: `v0.1.9` is `69555a3a5320f57c4a84f6cb4a236beb22144b39` on the default branch, and `.github/workflows/release.yml` runs on every push to that branch.
 - This is a new intent. Other intent folders stay as they are.
 - No deploy.
 
