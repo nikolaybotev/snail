@@ -195,14 +195,7 @@ async function runMainFlow() {
       }),
       { mode: 0o600 },
     );
-    fs.writeFileSync(
-      path.join(mailDir, '20260101T120000Z_1_0000000103.json'),
-      JSON.stringify({ uid: 103, uid_validity: 1 }),
-      { mode: 0o600 },
-    );
-
     mock.messages.set(101, tokenMessage());
-    mock.messages.set(104, tokenMessage());
 
     const account = {
       name: 'work',
@@ -267,15 +260,13 @@ async function runMainFlow() {
       !mock.sequence.some((l) => l.startsWith('webhook start') && l.includes('uid 101')),
       'uid 101 must not webhook',
     );
-    const beforeExistsHooks = mock.sequence.filter((l) => l.startsWith('webhook start'));
-    for (const line of beforeExistsHooks) {
-      assert.ok(
-        line.includes('uid 103'),
-        `unexpected webhook before EXISTS: ${line}`,
-      );
-    }
+    assert.ok(
+      !mock.sequence.some((l) => l.startsWith('webhook start')),
+      'no webhook before EXISTS',
+    );
 
     const beforeExistsLen = mock.sequence.length;
+    mock.messages.set(104, tokenMessage());
     mock.liveImap.emit('exists', { path: 'INBOX', count: 3, prevCount: 2 });
 
     await waitFor(() => mock.notifyCalls >= 1);
@@ -484,14 +475,23 @@ async function runArchivePath() {
   }
 }
 
-(async () => {
+async function runAllFlows() {
   await runMainFlow();
   await runSpacesMailbox();
   await runArchivePath();
-})().then(
-  () => process.exit(0),
-  (err) => {
-    console.error(err);
-    process.exit(1);
-  },
-);
+}
+
+if (require.main === module) {
+  runAllFlows().then(
+    () => process.exit(0),
+    (err) => {
+      console.error(err);
+      process.exit(1);
+    },
+  );
+} else {
+  const { test } = require('node:test');
+  test('message timing flows', { concurrency: 1 }, async () => {
+    await runAllFlows();
+  });
+}
