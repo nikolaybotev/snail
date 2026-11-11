@@ -259,7 +259,21 @@ async function runMainFlow() {
     ]);
     assert.equal(indexOfLine(mock.sequence, 'file write mailbox INBOX uid 102'), -1);
     assert.equal(indexOfLine(mock.sequence, 'file write mailbox INBOX uid 103'), -1);
-    assert.ok(!mock.sequence.some((l) => l.startsWith('webhook start')), 'uid 101 must not webhook');
+    await waitFor(() => indexOfLine(mock.sequence, 'fetch end mailbox INBOX uid 103') >= 0, 10000);
+    for (let i = 0; i < 20; i += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.ok(
+      !mock.sequence.some((l) => l.startsWith('webhook start') && l.includes('uid 101')),
+      'uid 101 must not webhook',
+    );
+    const beforeExistsHooks = mock.sequence.filter((l) => l.startsWith('webhook start'));
+    for (const line of beforeExistsHooks) {
+      assert.ok(
+        line.includes('uid 103'),
+        `unexpected webhook before EXISTS: ${line}`,
+      );
+    }
 
     const beforeExistsLen = mock.sequence.length;
     mock.liveImap.emit('exists', { path: 'INBOX', count: 3, prevCount: 2 });
