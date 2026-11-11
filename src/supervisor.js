@@ -470,48 +470,48 @@ async function syncMessages(client, store, state, uidNext, reload, logFn, mailbo
       logFn(`fetch end mailbox ${encMailbox} uid ${uid}`);
     }
     if (!msg) continue;
-    const saveResult = await store.saveOneMessage({
-      uid,
-      uidValidity: current.uidValidity,
-      messageId: msg.messageId,
-      from: msg.from,
-      to: msg.to,
-      subject: msg.subject,
-      envelopeDate: msg.envelopeDate,
-      body: msg.body,
-      htmlBody: msg.htmlBody,
-      attachments: msg.attachments,
-      beforeWrite: () => !(reload?.shouldAbortBeforeUid?.()),
-      onRenamed: () => {
-        if (reload?.renameInProgress) reload.renameInProgress.value = true;
-      },
-    });
-    if (saveResult.syncAborted) {
+    try {
+      const saveResult = await store.saveOneMessage({
+        uid,
+        uidValidity: current.uidValidity,
+        messageId: msg.messageId,
+        from: msg.from,
+        to: msg.to,
+        subject: msg.subject,
+        envelopeDate: msg.envelopeDate,
+        body: msg.body,
+        htmlBody: msg.htmlBody,
+        attachments: msg.attachments,
+        beforeWrite: () => !(reload?.shouldAbortBeforeUid?.()),
+        onRenamed: () => {
+          if (reload?.renameInProgress) reload.renameInProgress.value = true;
+        },
+      });
+      if (saveResult.syncAborted) {
+        throw new Error('ledger sync aborted');
+      }
+      if (saveResult.newLedgerRow && delivery) {
+        delivery.logOutstandingCount({ force: true });
+      }
+      if (
+        saveResult.attemptNotify &&
+        delivery &&
+        saveResult.path &&
+        saveResult.uid != null &&
+        saveResult.filename
+      ) {
+        await delivery.attemptAfterSave({
+          uid: saveResult.uid,
+          path: saveResult.path,
+          from: saveResult.wakeFrom,
+          subject: saveResult.wakeSubject,
+          filename: saveResult.filename,
+        });
+      }
+    } finally {
       if (reload?.renameInProgress) {
         reload.renameInProgress.value = false;
       }
-      throw new Error('ledger sync aborted');
-    }
-    if (saveResult.newLedgerRow && delivery) {
-      delivery.logOutstandingCount({ force: true });
-    }
-    if (
-      saveResult.attemptNotify &&
-      delivery &&
-      saveResult.path &&
-      saveResult.uid != null &&
-      saveResult.filename
-    ) {
-      await delivery.attemptAfterSave({
-        uid: saveResult.uid,
-        path: saveResult.path,
-        from: saveResult.wakeFrom,
-        subject: saveResult.wakeSubject,
-        filename: saveResult.filename,
-      });
-    }
-    if (reload?.renameInProgress) {
-      reload.renameInProgress.value = false;
     }
     current = store.readState() ?? current;
   }

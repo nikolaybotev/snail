@@ -573,19 +573,23 @@ test('AC6: webhook 500 retries leave one file, ledger row, and advance lastUid',
     (line) => lines.push(line),
     fetchImpl,
   );
-  await waitFor(() => errImap.control.sessions().some((s) => s.state === 'Selected'));
-  errImap.control.addMessage('INBOX', { raw: buildRawMessage({ subject: '500' }) });
-  await waitFor(() => lines.some((l) => l.includes('notify failed') && l.includes('status 500')), 15000);
-  await stopHarness(sup, errFr14);
-  assert.ok(fetchCount >= 1);
-  assert.ok(errFr14.delays.some((d) => NOTIFY_DELAY_MS.includes(d)));
-  assert.equal(
-    fs.readdirSync(errDir).filter((f) => f.endsWith('.json') && !f.startsWith('.')).length,
-    1,
-  );
-  assert.equal(readSnailState(errDir).lastUid, 1);
-  assert.ok(errFr14.delays.includes(1000));
-  await errImap.close();
+  try {
+    await waitFor(() => errImap.control.sessions().some((s) => s.state === 'Selected'));
+    errImap.control.addMessage('INBOX', { raw: buildRawMessage({ subject: '500' }) });
+    await waitFor(() => lines.some((l) => l.includes('notify failed') && l.includes('status 500')), 15000);
+    await waitFor(() => errFr14.delays.some((d) => NOTIFY_DELAY_MS.includes(d)), 15000);
+    assert.ok(fetchCount >= 1);
+    assert.equal(
+      fs.readdirSync(errDir).filter((f) => f.endsWith('.json') && !f.startsWith('.')).length,
+      1,
+    );
+    assert.equal(readSnailState(errDir).lastUid, 1);
+    assert.ok(errFr14.delays.some((d) => NOTIFY_DELAY_MS.includes(d)));
+  } finally {
+    errFr14.releaseWebhookSleep?.();
+    await stopHarness(sup, errFr14);
+    await errImap.close();
+  }
 });
 
 test('AC6: raw auth header and OpenClaw wake', serial, async () => {

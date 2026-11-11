@@ -95,24 +95,6 @@ test('AC17: UID below notifyBoundary is saved and not woken when lastUid is stil
 
 test('AC6: uidValidity change keeps ledger row; resync save adds no row', async () => {
   const mailDir = tempMailDir();
-  const { writeSnailState } = require('../src/mail-store.js');
-  writeSnailState(mailDir, {
-    uidValidity: 2,
-    notifyBoundary: 55,
-    backlogUid: 0,
-    lastUid: 55,
-  });
-  upsertNotifyItem(mailDir, {
-    notify_id: 'work/1/55',
-    account: 'work',
-    uid: 55,
-    uid_validity: 1,
-    file: 'old.json',
-    attempts: 1,
-    last_status: '500',
-    next_attempt_at: isoFromMs(0),
-    request_id: 'req-old',
-  });
   const store = createMailStore({
     mailDir,
     textLimit: 10000,
@@ -120,21 +102,38 @@ test('AC6: uidValidity change keeps ledger row; resync save adds no row', async 
     attachmentLimit: 10485760,
     accountName: 'work',
   });
-  const resync = await store.saveOneMessage({
-    uid: 56,
+  store.ensureMailboxState(1, 50);
+  const atBoundary = await store.saveOneMessage({
+    uid: 50,
     uidValidity: 1,
-    body: 'resync-under-old-validity',
+    body: 'at-boundary-v1',
+    subject: 'wake-me',
+    from: [{ address: 'a@example.com' }],
+  });
+  assert.equal(atBoundary.attemptNotify, true);
+  const ledgerBefore = readNotifyLedger(mailDir);
+  assert.equal(ledgerBefore.length, 1);
+  assert.equal(ledgerBefore[0].notify_id, 'work/1/50');
+  store.ensureMailboxState(2, 60);
+  const afterUvChange = readSnailState(mailDir);
+  assert.equal(afterUvChange.lastUid, 59);
+  const resync = await store.saveOneMessage({
+    uid: 60,
+    uidValidity: 1,
+    body: 'resync-old-validity',
     subject: 'resync',
     from: [{ address: 'a@example.com' }],
   });
   assert.equal(resync.attemptNotify, false);
   assert.equal(resync.saved, true);
-  assert.equal(readSnailState(mailDir).backlogUid, 0);
+  const state = readSnailState(mailDir);
+  assert.equal(state.uidValidity, 2);
+  assert.equal(state.notifyBoundary, 60);
+  assert.equal(state.lastUid, afterUvChange.lastUid);
   const items = readNotifyLedger(mailDir);
   assert.equal(items.length, 1);
-  assert.equal(items[0].notify_id, 'work/1/55');
-  assert.equal(items[0].uid_validity, 1);
-  assert.ok(!items.some((r) => r.notify_id === 'work/2/56'));
+  assert.equal(items[0].notify_id, 'work/1/50');
+  assert.ok(!items.some((r) => r.notify_id === 'work/2/60'));
 });
 
 test('both ledger writes fail: lastUid does not advance past uid', async () => {

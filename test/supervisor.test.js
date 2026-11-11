@@ -18,6 +18,7 @@ const {
   createFakeImapClient,
   formatLogLine,
   raceIdle,
+  syncMessages,
 } = require('../src/supervisor.js');
 const { readSnailState, initialSnailState } = require('../src/mail-store.js');
 const { parseCli, assertCleanArgv, readBuildStamp } = require('../snail.js');
@@ -500,6 +501,72 @@ test('AC16: failed imap connects use FR6 backoff per account', async () => {
     backoff = Math.min(backoff * 2, 60000);
   }
   assert.deepEqual(delays, [5000, 10000, 20000, 40000, 60000]);
+});
+
+test('ledger sync abort clears rename guard for pending reload', async () => {
+  const mailDir = tempDir('snail-sync-abort-');
+  const { createMailStore } = require('../src/mail-store.js');
+  const plainStore = createMailStore({
+    mailDir,
+    textLimit: 10000,
+    htmlLimit: 100000,
+    attachmentLimit: 10485760,
+    accountName: 'work',
+  });
+  const state = plainStore.ensureMailboxState(1, 101);
+  let blockLedger = false;
+  const failFs = {
+    ...fs,
+    writeFileSync(file, data, opts) {
+      if (blockLedger && String(file).includes('.snail-notify')) {
+        const err = new Error('ENOSPC');
+        err.code = 'ENOSPC';
+        throw err;
+      }
+      return fs.writeFileSync(file, data, opts);
+    },
+    readFileSync: fs.readFileSync.bind(fs),
+    existsSync: fs.existsSync.bind(fs),
+    mkdirSync: fs.mkdirSync.bind(fs),
+    renameSync: fs.renameSync.bind(fs),
+    readdirSync: fs.readdirSync.bind(fs),
+    unlinkSync: fs.unlinkSync.bind(fs),
+  };
+  const store = createMailStore({
+    mailDir,
+    textLimit: 10000,
+    htmlLimit: 100000,
+    attachmentLimit: 10485760,
+    accountName: 'work',
+    fs: failFs,
+  });
+  const reloadState = { pending: null };
+  const renameInProgress = { value: false };
+  const reload = {
+    shouldAbortBeforeUid: () => {
+      if (reloadState.pending && renameInProgress.value) {
+        return false;
+      }
+      return !!reloadState.pending;
+    },
+    renameInProgress,
+  };
+  const client = createFakeImapClient({
+    uidValidity: 1,
+    uidNext: 102,
+    messages: {
+      101: { body: 'body', from: [{ address: 'a@example.com' }], subject: 'S' },
+    },
+  });
+  blockLedger = true;
+  await assert.rejects(
+    () =>
+      syncMessages(client, store, state, 102, reload, null, 'INBOX', null),
+    /ledger sync aborted/
+  );
+  assert.equal(renameInProgress.value, false);
+  reloadState.pending = { kind: 'remove' };
+  assert.equal(reload.shouldAbortBeforeUid(), true);
 });
 
 test('FR10: runAccountLoop reconnect sleeps double through 20000', async () => {

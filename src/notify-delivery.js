@@ -340,6 +340,10 @@ function createNotifyDelivery(ctx) {
   }
 
   async function attemptLedgerRetryRow(row) {
+    const nowMs = now();
+    if (effectiveDueMs(row, nowMs) > nowMs) {
+      return;
+    }
     const requestId =
       row.request_id && row.request_id.length > 0 ? row.request_id : crypto.randomUUID();
     try {

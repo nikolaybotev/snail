@@ -509,6 +509,12 @@ test('ledger retry promotion held in memory when both writes fail', async () => 
     logs.filter((l) => l.includes('uid 12') && l.includes('status ledger')).length,
     1
   );
+  assert.equal(delivery.msUntilDelivery(), 1000);
+  await delivery.runDueTurn();
+  assert.equal(
+    logs.filter((l) => l.includes('uid 12') && l.includes('status ledger')).length,
+    1
+  );
   activeWebhookSleeper?.releasePending?.();
   activeWebhookSleeper = null;
 });
