@@ -3,6 +3,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const {
+  buildNotifyId,
+  upsertNotifyItem,
+  readNotifyLedger,
+  isoFromMs,
+  upsertLedgerRetryItem,
+} = require('./notify-ledger.js');
 
 const STATE_BASENAME = '.snail-state.json';
 
@@ -297,8 +304,7 @@ function buildMessagePayload(input, mailDir) {
  *   accountLog?: (msg: string) => void,
  *   fs?: typeof fs,
  *   log?: (line: string) => void,
- *   onWake?: (ctx: { uid: number, path: string, from: string, subject: string }) => Promise<'ok' | 'failed'>,
- *   now?: () => Date,
+ *   now?: () => number,
  * }} options
  */
 function createMailStore(options) {
@@ -306,8 +312,9 @@ function createMailStore(options) {
   const log = options.log ?? (() => {});
   const accountLog = options.accountLog;
   const mailboxName = options.mailbox;
-  const onWake = options.onWake ?? (async () => 'ok');
-  const now = options.now ?? (() => new Date());
+  const accountName = options.accountName ?? 'account';
+  const nowMs = options.now ?? (() => Date.now());
+  const saveNow = options.saveNow ?? (() => new Date(nowMs()));
   const mailDir = options.mailDir;
   const limits = {
     textLimit: options.textLimit,
@@ -374,7 +381,7 @@ function createMailStore(options) {
    * @param {string} [msg.body]
    * @param {string} [msg.htmlBody]
    * @param {{ filename?: string, contentType?: string, content?: Buffer }[]} [msg.attachments]
-   * @returns {Promise<{ skipped: boolean, saved: boolean, woke: boolean, path?: string, state: import('./mail-store.js').SnailState }>}
+   * @returns {Promise<{ skipped: boolean, saved: boolean, attemptNotify: boolean, path?: string, filename?: string, wakeFrom?: string, wakeSubject?: string, uid?: number, state: import('./mail-store.js').SnailState }>}
    */
   async function saveOneMessage(msg) {
     ensureMailDir();
@@ -385,7 +392,43 @@ function createMailStore(options) {
 
     const existingPath = lookupExistingMessageFile(mailDir, msg.uidValidity, msg.uid, fsImpl);
     if (existingPath) {
-      return { skipped: true, saved: false, woke: false, path: existingPath, state };
+      const basename = path.basename(existingPath);
+      if (
+        msg.uid > state.lastUid &&
+        msg.uid >= state.notifyBoundary &&
+        msg.uidValidity === state.uidValidity
+      ) {
+        const wakeFrom = 'unknown';
+        const wakeSubject = '(no subject)';
+        const prepared = prepareLedgerRow(
+          msg.uid,
+          msg.uidValidity,
+          basename,
+          state,
+          wakeFrom,
+          wakeSubject
+        );
+        if (prepared.attemptNotify) {
+          return {
+            skipped: true,
+            saved: false,
+            attemptNotify: true,
+            path: existingPath,
+            filename: basename,
+            wakeFrom,
+            wakeSubject,
+            uid: msg.uid,
+            state: prepared.state,
+          };
+        }
+      }
+      return {
+        skipped: true,
+        saved: false,
+        attemptNotify: false,
+        path: existingPath,
+        state,
+      };
     }
 
     const built = buildMessagePayload(
@@ -401,7 +444,7 @@ function createMailStore(options) {
         htmlBody: msg.htmlBody,
         attachments: msg.attachments,
         ...limits,
-        saveTime: now(),
+        saveTime: saveNow(),
       },
       mailDir
     );
@@ -413,7 +456,7 @@ function createMailStore(options) {
     const finalPath = built.absolutePath;
 
     if (msg.beforeWrite && msg.beforeWrite() === false) {
-      return { skipped: false, saved: false, woke: false, state };
+      return { skipped: false, saved: false, attemptNotify: false, state };
     }
 
     try {
@@ -432,7 +475,7 @@ function createMailStore(options) {
       const name = options.accountName ?? 'account';
       const message = err instanceof Error ? err.message : String(err);
       log(`[snail] [${name}] mail save failed uid ${msg.uid}: ${message}`);
-      return { skipped: false, saved: false, woke: false, state };
+      return { skipped: false, saved: false, attemptNotify: false, state };
     }
 
     const isBacklog = msg.uid < state.notifyBoundary;
@@ -441,24 +484,110 @@ function createMailStore(options) {
       if (msg.uid > state.backlogUid) {
         state = updateState(state, { backlogUid: msg.uid });
       }
-      return { skipped: false, saved: true, woke: false, path: finalPath, state };
-    }
-
-    let woke = false;
-    if (msg.uid >= state.notifyBoundary) {
-      await onWake({
-        uid: msg.uid,
+      return {
+        skipped: false,
+        saved: true,
+        attemptNotify: false,
         path: finalPath,
-        from: built.wakeFrom,
-        subject: built.wakeSubject,
-      });
-      woke = true;
-      if (msg.uid > state.lastUid) {
-        state = updateState(state, { lastUid: msg.uid });
-      }
+        state,
+      };
     }
 
-    return { skipped: false, saved: true, woke, path: finalPath, state };
+    if (msg.uid >= state.notifyBoundary) {
+      const prepared = prepareLedgerRow(
+        msg.uid,
+        msg.uidValidity,
+        built.filename,
+        state,
+        built.wakeFrom,
+        built.wakeSubject
+      );
+      return {
+        skipped: false,
+        saved: true,
+        attemptNotify: prepared.attemptNotify,
+        path: finalPath,
+        filename: built.filename,
+        wakeFrom: built.wakeFrom,
+        wakeSubject: built.wakeSubject,
+        uid: msg.uid,
+        state: prepared.state,
+      };
+    }
+
+    return { skipped: false, saved: true, attemptNotify: false, path: finalPath, state };
+  }
+
+  /**
+   * @param {number} uid
+   * @param {number} uidValidity
+   * @param {string} basename
+   * @param {import('./mail-store.js').SnailState} state
+   * @param {string} wakeFrom
+   * @param {string} wakeSubject
+   */
+  function prepareLedgerRow(uid, uidValidity, basename, state, _wakeFrom, _wakeSubject) {
+    if (uidValidity !== state.uidValidity) {
+      return { attemptNotify: false, state };
+    }
+    try {
+      const notifyId = buildNotifyId(accountName, uidValidity, uid);
+      const nowMsVal = nowMs();
+      let existing;
+      try {
+        existing = readNotifyLedger(mailDir, fsImpl).find((r) => r.notify_id === notifyId);
+      } catch {
+        existing = undefined;
+      }
+      const requestId =
+        existing?.request_id && existing.request_id.length > 0
+          ? existing.request_id
+          : crypto.randomUUID();
+      const { isNew } = upsertNotifyItem(
+        mailDir,
+        {
+          notify_id: notifyId,
+          account: accountName,
+          uid,
+          uid_validity: uidValidity,
+          file: basename,
+          attempts: existing?.attempts ?? 0,
+          last_status: existing?.last_status ?? 'none',
+          next_attempt_at: existing?.next_attempt_at ?? isoFromMs(nowMsVal),
+          request_id: requestId,
+        },
+        fsImpl
+      );
+      if (isNew && accountLog) {
+        accountLog(`notify pending uid ${uid} file ${basename}`);
+      }
+      let nextState = state;
+      if (uid > state.lastUid) {
+        nextState = updateState(state, { lastUid: uid });
+      }
+      return { attemptNotify: true, state: nextState };
+    } catch {
+      const notifyId = buildNotifyId(accountName, uidValidity, uid);
+      const { attempts } = upsertLedgerRetryItem(
+        mailDir,
+        {
+          notify_id: notifyId,
+          account: accountName,
+          uid,
+          uid_validity: uidValidity,
+          file: basename,
+          attempts: 0,
+          last_status: 'none',
+          next_attempt_at: isoFromMs(nowMs()),
+        },
+        nowMs(),
+        fsImpl
+      );
+      if (accountLog) {
+        accountLog(`notify failed uid ${uid} attempts ${attempts} status ledger`);
+      }
+      return { attemptNotify: false, state };
+    }
   }
 
   return {

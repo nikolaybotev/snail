@@ -11,9 +11,10 @@ const {
   INITIAL_BACKOFF_MS,
   MAX_BACKOFF_MS,
 } = require('./secrets.js');
-const { OpenClawClient, notifyOpenClawWake } = require('./notifiers/openclaw.js');
-const { buildWebhookBody, notifyWebhook } = require('./notifiers/webhook.js');
+const { OpenClawClient } = require('./notifiers/openclaw.js');
 const { defaultSleeper } = require('./notifiers/retry.js');
+const { createNotifyDelivery, REQUEST_POLL_MS } = require('./notify-delivery.js');
+const { hasRedeliverRequestFiles } = require('./notify-ledger.js');
 
 const IDLE_KEEPALIVE_MS = 29 * 60 * 1000;
 const CONNECT_INITIAL_BACKOFF_MS = INITIAL_BACKOFF_MS;
@@ -207,6 +208,23 @@ async function runAccountLoop(ctx) {
     }
   }
 
+  const delivery = createNotifyDelivery({
+    account,
+    notifierSecret,
+    openclawClient,
+    log,
+    fetchImpl: ctx.fetchImpl,
+    sleeper,
+    now,
+    fs: ctx.fs,
+  });
+
+  if (delivery.outstandingCount() > 0) {
+    delivery.logOutstandingCount();
+  }
+  await delivery.applyRedeliverRequests();
+  await delivery.runDueTurn();
+
   const store = createMailStore({
     mailDir: account.mail_dir,
     textLimit: account.textLimit,
@@ -217,50 +235,7 @@ async function runAccountLoop(ctx) {
     accountLog: log,
     fs: ctx.fs,
     log: (line) => ctx.log(line),
-    onWake: async (wakeCtx) => {
-      let result;
-      if (account.notifier === 'webhook') {
-        const recordPath = wakeCtx.path;
-        let record;
-        try {
-          record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
-        } catch {
-          record = {};
-        }
-        const payload = buildWebhookBody({
-          account: account.name,
-          from: wakeCtx.from,
-          subject: wakeCtx.subject,
-          date: record.date ?? new Date().toISOString(),
-          message_id: record.message_id ?? '',
-          path: recordPath,
-          mailbox: account.mailbox,
-          uid: wakeCtx.uid,
-          uid_validity: record.uid_validity ?? store.readState()?.uidValidity ?? 0,
-        });
-        result = await notifyWebhook({
-          webhookUrl: account.webhook_url,
-          secret: notifierSecret,
-          webhookAuth: account.webhook_auth,
-          webhookHeader: account.webhook_header,
-          payload,
-          fetchImpl: ctx.fetchImpl,
-          sleeper,
-          log,
-        });
-      } else {
-        result = await notifyOpenClawWake({
-          client: openclawClient,
-          from: wakeCtx.from,
-          subject: wakeCtx.subject,
-          path: wakeCtx.path,
-          sleeper,
-        });
-      }
-      const outcome = result.ok ? 'notify ok' : 'notify failed';
-      log(`${outcome} uid ${wakeCtx.uid} attempts ${result.attempts}`);
-      return result.ok ? 'ok' : 'failed';
-    },
+    now,
   });
 
   const imapClient = ctx.imapFactory(account, password);
@@ -291,6 +266,7 @@ async function runAccountLoop(ctx) {
         reloadHooks(),
         log,
         account.mailbox,
+        delivery,
       );
 
       if (ctx.stopAfterSync) {
@@ -301,6 +277,7 @@ async function runAccountLoop(ctx) {
         ) {
           await new Promise((resolve) => setTimeout(resolve, 20));
         }
+        stopSignal.stopped = true;
         break;
       }
 
@@ -314,13 +291,25 @@ async function runAccountLoop(ctx) {
 
       let idleEnteredAt = now();
       while (!stopSignal.stopped) {
+        let deliveryMs = delivery.msUntilDelivery();
+        if (deliveryMs === 0) {
+          await delivery.applyRedeliverRequests();
+          await delivery.runDueTurn();
+          deliveryMs = delivery.msUntilDelivery();
+        }
         const idleResult = await raceIdle(
           imapClient,
           idleKeepaliveMs,
           idleEnteredAt,
           now,
           sleeper,
-          stopSignal
+          stopSignal,
+          {
+            pollMs: REQUEST_POLL_MS,
+            deliveryMs,
+            mailDir: account.mail_dir,
+            fs: ctx.fs ?? fs,
+          }
         );
         if (stopSignal.stopped || idleResult === 'stop') {
           if (typeof imapClient.cancelIdle === 'function') {
@@ -328,10 +317,24 @@ async function runAccountLoop(ctx) {
           }
           break;
         }
+        if (idleResult === 'poll' || idleResult === 'delivery') {
+          if (typeof imapClient.cancelIdle === 'function') {
+            imapClient.cancelIdle();
+          }
+          await delivery.applyRedeliverRequests();
+          await delivery.runDueTurn();
+          idleEnteredAt = now();
+          continue;
+        }
         if (idleResult === 'keepalive') {
           if (typeof imapClient.cancelIdle === 'function') {
             imapClient.cancelIdle();
           }
+          if (delivery.outstandingCount() > 0) {
+            delivery.logOutstandingCount();
+          }
+          await delivery.applyRedeliverRequests();
+          await delivery.runDueTurn();
           idleEnteredAt = now();
           continue;
         }
@@ -351,6 +354,7 @@ async function runAccountLoop(ctx) {
               reloadHooks(),
               log,
               account.mailbox,
+              delivery,
             );
           }
           if (reloadState?.pending && !renameInProgress.value) {
@@ -403,7 +407,7 @@ async function runAccountLoop(ctx) {
  *   renameInProgress?: { value: boolean },
  * }} [reload]
  */
-async function syncMessages(client, store, state, uidNext, reload, logFn, mailbox) {
+async function syncMessages(client, store, state, uidNext, reload, logFn, mailbox, delivery) {
   let current = store.readState() ?? state;
   const uids = uidsToSync(current, uidNext);
   const encMailbox = encodeURIComponent(mailbox);
@@ -419,7 +423,7 @@ async function syncMessages(client, store, state, uidNext, reload, logFn, mailbo
       logFn(`fetch end mailbox ${encMailbox} uid ${uid}`);
     }
     if (!msg) continue;
-    await store.saveOneMessage({
+    const saveResult = await store.saveOneMessage({
       uid,
       uidValidity: current.uidValidity,
       messageId: msg.messageId,
@@ -435,6 +439,21 @@ async function syncMessages(client, store, state, uidNext, reload, logFn, mailbo
         if (reload?.renameInProgress) reload.renameInProgress.value = true;
       },
     });
+    if (
+      saveResult.attemptNotify &&
+      delivery &&
+      saveResult.path &&
+      saveResult.uid != null &&
+      saveResult.filename
+    ) {
+      await delivery.attemptAfterSave({
+        uid: saveResult.uid,
+        path: saveResult.path,
+        from: saveResult.wakeFrom ?? 'unknown',
+        subject: saveResult.wakeSubject ?? '(no subject)',
+        filename: saveResult.filename,
+      });
+    }
     if (reload?.renameInProgress) {
       reload.renameInProgress.value = false;
     }
@@ -450,7 +469,7 @@ async function syncMessages(client, store, state, uidNext, reload, logFn, mailbo
  * @param {(ms: number) => Promise<void>} sleeper
  * @param {{ stopped: boolean }} [stopSignal]
  */
-async function raceIdle(client, idleKeepaliveMs, idleEnteredAt, now, sleeper, stopSignal) {
+async function raceIdle(client, idleKeepaliveMs, idleEnteredAt, now, sleeper, stopSignal, extra) {
   if (stopSignal?.stopped) {
     return 'stop';
   }
@@ -470,15 +489,37 @@ async function raceIdle(client, idleKeepaliveMs, idleEnteredAt, now, sleeper, st
       }
     }, 5);
   });
+  /** @type {Promise<string>[]} */
+  const timerPromises = [];
+  if (remaining === 0) {
+    timerPromises.push(Promise.resolve('keepalive'));
+  } else {
+    timerPromises.push(sleeper(remaining).then(() => 'keepalive'));
+  }
+  if (extra?.pollMs != null && extra.pollMs > 0 && extra.mailDir) {
+    const pollFs = extra.fs ?? fs;
+    timerPromises.push(
+      (async () => {
+        while (true) {
+          await sleeper(extra.pollMs);
+          if (hasRedeliverRequestFiles(extra.mailDir, pollFs)) {
+            return 'poll';
+          }
+        }
+      })()
+    );
+  }
+  if (extra?.deliveryMs != null && extra.deliveryMs > 0) {
+    timerPromises.push(sleeper(extra.deliveryMs).then(() => 'delivery'));
+  }
   try {
-    let result;
-    if (remaining === 0) {
-      result = await Promise.race([stopPromise, Promise.resolve('keepalive')]);
-    } else {
-      const timerPromise = sleeper(remaining).then(() => 'keepalive');
-      result = await Promise.race([idlePromise, timerPromise, stopPromise]);
-    }
-    if (result === 'keepalive' || result === 'stop') {
+    const result = await Promise.race([idlePromise, stopPromise, ...timerPromises]);
+    if (
+      result === 'keepalive' ||
+      result === 'stop' ||
+      result === 'poll' ||
+      result === 'delivery'
+    ) {
       if (typeof client.cancelIdle === 'function') {
         await client.cancelIdle();
       }

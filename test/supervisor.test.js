@@ -23,6 +23,8 @@ const { readSnailState, initialSnailState } = require('../src/mail-store.js');
 const { parseCli, assertCleanArgv, readBuildStamp } = require('../snail.js');
 const { NOTIFY_RETRY_DELAYS_MS } = require('../src/notifiers/retry.js');
 const { buildWebhookBody, WEBHOOK_ATTEMPT_TIMEOUT_MS } = require('../src/notifiers/webhook.js');
+const { REQUEST_POLL_MS } = require('../src/notify-delivery.js');
+const { NOTIFY_DELAY_MS } = require('../src/notify-ledger.js');
 
 const root = path.join(__dirname, '..');
 const snailPath = path.join(root, 'snail.js');
@@ -39,8 +41,11 @@ function instantSleeper(delays) {
 
 function webhookFriendlySleeper(delays) {
   return async (ms) => {
-    if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS) {
+    if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS || ms === REQUEST_POLL_MS) {
       return new Promise(() => {});
+    }
+    if (NOTIFY_DELAY_MS.includes(ms) || ms === 60000) {
+      await new Promise((resolve) => setTimeout(resolve, 15));
     }
     if (delays) {
       delays.push(ms);
@@ -454,7 +459,15 @@ test('AC9: failing webhook leaves one file, advances lastUid, logs notify failed
   assert.equal(files.length, 1);
   assert.equal(readSnailState(mailDir).lastUid, 100);
   assert.ok(lines.some((l) => l.includes('notify failed') && l.includes('100')));
-  assert.equal(fetchCount, 1 + NOTIFY_RETRY_DELAYS_MS.length);
+  assert.equal(fetchCount, 1);
+  const ledger = JSON.parse(
+    fs.readFileSync(path.join(mailDir, '.snail-notify.json'), 'utf8')
+  );
+  assert.equal(ledger.items.length, 1);
+  assert.match(
+    lines.find((l) => l.includes('notify failed') && l.includes('100')),
+      /status 500/
+  );
 
   const secondPass = createFakeImapClient({
     uidNext: 101,
@@ -700,6 +713,7 @@ test('webhook payload builder still omits forbidden keys in supervisor path', ()
     mailbox: 'INBOX',
     uid: 1,
     uid_validity: 1,
+    notify_id: 'work/1/1',
   });
-  assert.equal(Object.keys(body).length, 9);
+  assert.equal(Object.keys(body).length, 10);
 });

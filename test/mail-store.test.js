@@ -16,6 +16,7 @@ const {
   createMailStore,
   STATE_BASENAME,
 } = require('../src/mail-store.js');
+const { readNotifyLedger } = require('../src/notify-ledger.js');
 
 function tempMailDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'snail-mail-'));
@@ -69,16 +70,12 @@ test('AC17: missing state file uses four-field write, not lastUID 0 fallback', (
 
 test('AC17: UID below notifyBoundary is saved and not woken when lastUid is still 0', async () => {
   const mailDir = tempMailDir();
-  const wakes = [];
   const store = createMailStore({
     mailDir,
     textLimit: 10000,
     htmlLimit: 100000,
     attachmentLimit: 10485760,
-    onWake: async (ctx) => {
-      wakes.push(ctx.uid);
-      return 'ok';
-    },
+    accountName: 'work',
   });
   store.ensureMailboxState(1, 100);
   const stateOnDisk = readSnailState(mailDir);
@@ -89,8 +86,8 @@ test('AC17: UID below notifyBoundary is saved and not woken when lastUid is stil
     body: 'backlog',
   });
   assert.equal(result.saved, true);
-  assert.equal(result.woke, false);
-  assert.equal(wakes.length, 0);
+  assert.equal(result.attemptNotify, false);
+  assert.equal(readNotifyLedger(mailDir).length, 0);
   const after = readSnailState(mailDir);
   assert.equal(after.backlogUid, 10);
   assert.equal(after.lastUid, 99);
@@ -98,22 +95,18 @@ test('AC17: UID below notifyBoundary is saved and not woken when lastUid is stil
 
 test('AC17: new UID at or above boundary is woken while backlog is in progress', async () => {
   const mailDir = tempMailDir();
-  const wakes = [];
   const store = createMailStore({
     mailDir,
     textLimit: 10000,
     htmlLimit: 100000,
     attachmentLimit: 10485760,
-    onWake: async (ctx) => {
-      wakes.push(ctx.uid);
-      return 'ok';
-    },
+    accountName: 'work',
   });
   store.ensureMailboxState(1, 100);
   await store.saveOneMessage({ uid: 5, uidValidity: 1, body: 'backlog-a' });
-  assert.equal(wakes.length, 0);
-  await store.saveOneMessage({ uid: 100, uidValidity: 1, body: 'new-mail' });
-  assert.deepEqual(wakes, [100]);
+  const notify = await store.saveOneMessage({ uid: 100, uidValidity: 1, body: 'new-mail' });
+  assert.equal(notify.attemptNotify, true);
+  assert.equal(readNotifyLedger(mailDir).length, 1);
   const after = readSnailState(mailDir);
   assert.equal(after.backlogUid, 5);
   assert.equal(after.lastUid, 100);
@@ -121,7 +114,6 @@ test('AC17: new UID at or above boundary is woken while backlog is in progress',
 
 test('AC17: failed write leaves backlogUid unchanged and does not wake', async () => {
   const mailDir = tempMailDir();
-  const wakes = [];
   let failNext = true;
   const failingFs = {
     ...fs,
@@ -155,17 +147,12 @@ test('AC17: failed write leaves backlogUid unchanged and does not wake', async (
     fs: failingFs,
     accountName: 'work',
     log: () => {},
-    onWake: async (ctx) => {
-      wakes.push(ctx.uid);
-      return 'ok';
-    },
   });
   store.ensureMailboxState(1, 100);
   const before = readSnailState(mailDir);
   const result = await store.saveOneMessage({ uid: 3, uidValidity: 1, body: 'x' });
   assert.equal(result.saved, false);
-  assert.equal(result.woke, false);
-  assert.equal(wakes.length, 0);
+  assert.equal(result.attemptNotify, false);
   const after = readSnailState(mailDir);
   assert.deepEqual(after, before);
 });
@@ -218,10 +205,7 @@ test('AC5: existing file is not rewritten when envelope date would differ', asyn
     textLimit: 10000,
     htmlLimit: 100000,
     attachmentLimit: 10485760,
-    onWake: async (ctx) => {
-      wakes.push(ctx);
-      return 'ok';
-    },
+    accountName: 'work',
   });
   const again = await store2.saveOneMessage({
     uid: 55,
@@ -229,31 +213,28 @@ test('AC5: existing file is not rewritten when envelope date would differ', asyn
     body: 'again',
   });
   assert.equal(again.skipped, true);
-  assert.equal(wakes.length, 0);
+  assert.equal(again.attemptNotify, false);
 });
 
 test('AC5: backlog UID is not woken; new UID woken once then lastUid updated', async () => {
   const mailDir = tempMailDir();
-  const wakes = [];
   const store = createMailStore({
     mailDir,
     textLimit: 10000,
     htmlLimit: 100000,
     attachmentLimit: 10485760,
-    onWake: async (ctx) => {
-      wakes.push(ctx.uid);
-      return 'ok';
-    },
+    accountName: 'work',
   });
   store.ensureMailboxState(3, 200);
-  await store.saveOneMessage({ uid: 50, uidValidity: 3, body: 'b' });
-  await store.saveOneMessage({ uid: 200, uidValidity: 3, body: 'n' });
-  assert.deepEqual(wakes, [200]);
+  const backlog = await store.saveOneMessage({ uid: 50, uidValidity: 3, body: 'b' });
+  assert.equal(backlog.attemptNotify, false);
+  const fresh = await store.saveOneMessage({ uid: 200, uidValidity: 3, body: 'n' });
+  assert.equal(fresh.attemptNotify, true);
+  assert.equal(readNotifyLedger(mailDir).length, 1);
   const state = readSnailState(mailDir);
   assert.equal(state.lastUid, 200);
-  wakes.length = 0;
-  await store.saveOneMessage({ uid: 200, uidValidity: 3, body: 'n2' });
-  assert.equal(wakes.length, 0);
+  const again = await store.saveOneMessage({ uid: 200, uidValidity: 3, body: 'n2' });
+  assert.equal(again.attemptNotify, false);
 });
 
 test('AC5: directory lookup uses uidValidity and uid suffix', () => {
@@ -384,7 +365,7 @@ test('lastUid update preserves notifyBoundary and does not drop below boundary',
     textLimit: 10000,
     htmlLimit: 100000,
     attachmentLimit: 10485760,
-    onWake: async () => 'failed',
+    accountName: 'work',
   });
   store.ensureMailboxState(1, 100);
   await store.saveOneMessage({ uid: 100, uidValidity: 1, body: 'new' });

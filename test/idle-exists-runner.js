@@ -88,8 +88,10 @@ async function waitFor(predicate, timeoutMs = 5000) {
 }
 
 /** Block keepalive and webhook attempt timeouts so fetchImpl can succeed. */
+const { REQUEST_POLL_MS } = require('../src/notify-delivery.js');
+
 async function idleTestSleeper(ms) {
-  if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS || ms >= IDLE_KEEPALIVE_MS) {
+  if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS || ms === REQUEST_POLL_MS || ms >= IDLE_KEEPALIVE_MS) {
     return new Promise(() => {});
   }
 }

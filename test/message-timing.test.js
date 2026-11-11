@@ -117,7 +117,8 @@ test('FR1 log statements unchanged in source', () => {
 
   assert.match(snail, /\$\{new Date\(\)\.toISOString\(\)\} \[snail\] starting/);
   assert.match(supervisor, /function formatLogLine[\s\S]*new Date\(\)\.toISOString\(\)/);
-  assert.match(supervisor, /`\$\{outcome\} uid \$\{wakeCtx\.uid\} attempts \$\{result\.attempts\}`/);
+  assert.match(supervisor, /createNotifyDelivery/);
+  assert.match(supervisor, /delivery\.attemptAfterSave/);
   assert.match(supervisor, /imap disconnected: \$\{msg\}/);
   assert.match(mailStore, /mail save failed uid \$\{msg\.uid\}/);
   assert.match(supervisorTest, /formatLogLine uses UTC prefix and account tag/);

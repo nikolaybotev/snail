@@ -10,6 +10,7 @@ const IDLE_REFRESH_MS = 4 * 60 * 1000;
 
 const { USAGE, loadSnailConfig } = require('./src/config.js');
 const { startSupervisor, coerceImapInteger } = require('./src/supervisor.js');
+const { runNotifyCommand } = require('./src/notify-cli.js');
 
 const NODE_MAJOR_REQUIRED = 26;
 
@@ -18,6 +19,41 @@ const NODE_MAJOR_REQUIRED = 26;
  */
 function parseCli(argv) {
   const args = argv.slice(2);
+  if (args[0] === 'notify-list' || args[0] === 'notify-redeliver') {
+    const command = args[0];
+    let configPath = null;
+    /** @type {{ account?: string, uid?: number, file?: string }} */
+    const opts = {};
+    for (let i = 1; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === '--config') {
+        configPath = args[i + 1];
+        i += 1;
+        continue;
+      }
+      if (arg === '--account') {
+        opts.account = args[i + 1];
+        i += 1;
+        continue;
+      }
+      if (arg === '--uid') {
+        opts.uid = Number.parseInt(args[i + 1], 10);
+        i += 1;
+        continue;
+      }
+      if (arg === '--file') {
+        opts.file = args[i + 1];
+        i += 1;
+        continue;
+      }
+      return { kind: 'usage' };
+    }
+    if (!configPath || !path.isAbsolute(configPath)) {
+      return { kind: 'usage' };
+    }
+    return { kind: command, configPath, opts };
+  }
+
   let configPath = null;
   let showVersion = false;
   let verbose = false;
@@ -296,6 +332,12 @@ async function main() {
   if (cli.kind === 'usage') {
     console.error(USAGE);
     process.exit(2);
+  }
+
+  if (cli.kind === 'notify-list' || cli.kind === 'notify-redeliver') {
+    requireNodeMajor();
+    runNotifyCommand(path.resolve(cli.configPath), cli.kind, cli.opts);
+    return;
   }
 
   requireNodeMajor();
