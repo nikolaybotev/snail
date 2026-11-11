@@ -118,9 +118,9 @@ test('AC6: uidValidity change keeps ledger row; resync save adds no row', async 
   const afterUvChange = readSnailState(mailDir);
   assert.equal(afterUvChange.lastUid, 59);
   const resync = await store.saveOneMessage({
-    uid: 60,
-    uidValidity: 1,
-    body: 'resync-old-validity',
+    uid: 10,
+    uidValidity: 2,
+    body: 'resync-backlog',
     subject: 'resync',
     from: [{ address: 'a@example.com' }],
   });
@@ -133,7 +133,7 @@ test('AC6: uidValidity change keeps ledger row; resync save adds no row', async 
   const items = readNotifyLedger(mailDir);
   assert.equal(items.length, 1);
   assert.equal(items[0].notify_id, 'work/1/50');
-  assert.ok(!items.some((r) => r.notify_id === 'work/2/60'));
+  assert.ok(!items.some((r) => r.notify_id === 'work/2/10'));
 });
 
 test('both ledger writes fail: lastUid does not advance past uid', async () => {
