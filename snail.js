@@ -186,9 +186,19 @@ function createImapFlowClient(account, password, imapOverrides) {
           flowOptions.socketTimeout = imapOverrides.socketTimeout;
         }
       }
-      client = new ImapFlow(flowOptions);
-      client.on('error', () => {});
-      await client.connect();
+      const next = new ImapFlow(flowOptions);
+      next.on('error', () => {});
+      try {
+        await next.connect();
+      } catch (err) {
+        try {
+          await next.close();
+        } catch {
+          /* ignore */
+        }
+        throw err;
+      }
+      client = next;
     },
     async mailboxOpen(mailbox) {
       if (!client) throw new Error('not connected');

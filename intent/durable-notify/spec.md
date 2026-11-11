@@ -10,7 +10,7 @@
 
 Mail intake stays exactly-once in `.snail-state.json`. Notify delivery becomes at-least-once in a separate `.snail-notify.json` ledger. A row is written before `lastUid` advances, survives restart, and retries with backoff until the notifier succeeds. Duplicate notifies are expected. Each one carries a stable `notify_id`. The operator can list outstanding rows and queue a redelivery. The log shows pending and failed rows without secrets, webhook URLs, or headers.
 
-This pull request adds this folder only. The implementation pull request is later, after review. Merging this pull request would publish a release without that implementation (D8).
+Pull request `#25` on branch `cursor/durable-notify-4d40` carries this intent folder and the Phase 1 implementation. Squash-merge that pull request only when required checks `test` and `javascript` have succeeded; that merge publishes the next patch release (D8).
 
 ## 2. Goals and non-goals
 
@@ -31,9 +31,9 @@ This pull request adds this folder only. The implementation pull request is late
 - Replaying every saved file that already sits at or below `lastUid` when this release is installed.
 - A new secret field, a new resolver, or a new config key.
 - Changing the OpenClaw handshake.
-- Merging this pull request, publishing a release from it, or deploying.
+- Deploying before the required checks succeed.
 
-**Release phasing.** The delivery change is one implementation phase in [plan.md](plan.md). This pull request is the design folder and stays unmerged. Nothing in this intent is postponed. A later idea starts a new intent folder.
+**Release phasing.** The delivery change is Phase 1 in [plan.md](plan.md). Pull request `#25` on branch `cursor/durable-notify-4d40` carries the intent folder and the Phase 1 implementation. Squash-merge that pull request only when required checks `test` and `javascript` have succeeded; that merge publishes the next patch release (D8). Nothing in this intent is postponed. A later idea starts a new intent folder.
 
 ## 3. Principles
 
@@ -97,16 +97,16 @@ Checked 2026-11-11 on `v0.1.9` (`69555a3a5320f57c4a84f6cb4a236beb22144b39`).
 
 | AC | What | Check |
 |---|---|---|
-| AC1 | A 400 that never becomes 2xx leaves one message file, advances `lastUid`, keeps one ledger row, logs `notify failed` with `status 400`, and a later sync does not write a second file. The sleeper records `1000`, then `2000`, `4000`, `8000`, `16000`, then `60000`. | `npm test` |
-| AC2 | Stopping after the row and `lastUid` are durable, then starting again, does not fetch that uid again and does post again. The second start does not write a second message file. | `npm test` |
-| AC3 | A 2xx removes the row, logs `notify ok uid <uid> attempts <n>`, and a later turn does not post that `notify_id` again. | `npm test` |
-| AC4 | The webhook JSON contains `notify_id` equal to `{account}/{uid_validity}/{uid}` and omits `body`, `html_body`, and attachment content. The wake text ends with ` \| Id: ` plus that same id. The `request` token on `webhook start` is the row's stable `request_id`, not `notify_id`, and stays the same across durable retries. | `npm test` |
-| AC5 | One account's webhook attempt leaves the 10-second sleeper pending. The other account still saves and notifies. The blocked account's backoff sleep is not applied to the second account. | `npm test` |
-| AC6 | A uid below `notifyBoundary` creates no ledger row and no notify. A changed `uidValidity` creates no row for the resync saves and leaves an older row in place to retry. | `npm test` |
-| AC7 | `notify-list` prints the FR7 line, exits 1 when a row exists, and exits 0 when none exist. A planted secret is absent from stdout, stderr, the ledger, and request files. The command does not spawn `security` or `op`. | `npm test` |
-| AC8 | `notify-redeliver` for a failed uid queues a request, leaves `lastUid` and the message file unchanged, and the daemon posts again while the 29-minute sleeper stays pending. `--file` with `/` or `..` exits 2 and writes no request. A backlog uid and a resync file with no row are refused. | `npm test` |
-| AC9 | A file already at or below `lastUid` with no ledger row is not notified on startup. `notify-redeliver --file` for that basename, when it is at or above the current boundary, creates one row and posts once. | `npm test` |
-| AC10 | README contains the D7 section. `AGENTS.md` and `REVIEW.md` contain the D7 sentences. The config example gains no key. `npm test` exits 0. | `npm test` |
+| AC1 | A 400 that never becomes 2xx leaves one message file, advances `lastUid`, keeps one ledger row, logs `notify failed` with `status 400`, and a later sync does not write a second file. Each failure advances `next_attempt_at` by `1000`, `2000`, `4000`, `8000`, `16000`, then `60000`. | `npm test` — `test/notify-delivery.test.js` (400 schedule); `test/supervisor.test.js` (single file and `lastUid`); harness AC6 (status 500, partial backoff) |
+| AC2 | Stopping after the row and `lastUid` are durable, then starting again, does not fetch that uid again and does post again. The second start does not write a second message file. | `npm test` — `test/notify-delivery.test.js` (due repost, file unchanged); restart-without-refetch is manual per FR3 existing-file path (not a separate automated case) |
+| AC3 | A 2xx removes the row, logs `notify ok uid <uid> attempts <n>`, and a later turn does not post that `notify_id` again. | `npm test` — `test/notify-delivery.test.js` |
+| AC4 | The webhook JSON contains `notify_id` equal to `{account}/{uid_validity}/{uid}` and omits `body`, `html_body`, and attachment content. The wake text ends with ` \| Id: ` plus that same id. The `request` token on `webhook start` is the row's stable `request_id`, not `notify_id`, and stays the same across durable retries. | `npm test` — `test/notify-delivery.test.js`, `test/imap-harness.test.js` (OpenClaw wake) |
+| AC5 | One account's webhook attempt leaves the 10-second sleeper pending. The other account still saves and notifies. The blocked account's backoff sleep is not applied to the second account. IMAP reconnect doubling through `20000` is covered in `test/supervisor.test.js` (FR10); `test/imap-harness.test.js` checks `5000` then `10000` under live IMAP. | `npm test` — `test/supervisor.test.js` (cross-account and reconnect); `test/imap-harness.test.js` (partial reconnect) |
+| AC6 | A uid below `notifyBoundary` creates no ledger row and no notify. A changed `uidValidity` creates no row for the resync saves and leaves an older row in place to retry. | `npm test` — `test/mail-store.test.js` (boundary and resync row) |
+| AC7 | `notify-list` prints the FR7 line, exits 1 when a row exists, and exits 0 when none exist. A planted secret is absent from stdout, stderr, and the ledger file. The command does not spawn `security` or `op`. | `npm test` — `test/notify-cli.test.js`; request-file secret scan is not automated |
+| AC8 | `notify-redeliver` for a failed uid queues a request, leaves `lastUid` and the message file unchanged, and the daemon posts again while the 29-minute sleeper stays pending. `--file` with `/` or `..` exits 2 and writes no request. A backlog uid and a resync file with no row are refused. | `npm test` — `test/notify-delivery.test.js` (request applied); CLI refusal paths and 29-minute sleeper are not fully automated |
+| AC9 | A file already at or below `lastUid` with no ledger row is not notified on startup. `notify-redeliver --file` for that basename, when it is at or above the current boundary, creates one row and posts once. | `npm test` — `test/notify-delivery.test.js` (no row at startup); full `--file` redeliver post is covered together with AC8 request apply |
+| AC10 | README contains the D7 section. `AGENTS.md` and `REVIEW.md` contain the D7 sentences. The config example gains no key. `npm test` exits 0. | `npm test` — `test/supervisor.test.js` (FR1 source lines); README/`AGENTS.md`/`REVIEW.md` prose is not diff-tested |
 
 ## 7. Design decisions
 

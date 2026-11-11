@@ -502,6 +502,60 @@ test('AC16: failed imap connects use FR6 backoff per account', async () => {
   assert.deepEqual(delays, [5000, 10000, 20000, 40000, 60000]);
 });
 
+test('FR10: runAccountLoop reconnect sleeps double through 20000', async () => {
+  const delays = [];
+  let connectCalls = 0;
+  const failImap = {
+    id: 'fail-imap',
+    setLog() {},
+    async connect() {
+      connectCalls += 1;
+      throw new Error('Command failed');
+    },
+    async mailboxOpen() {
+      return { uidValidity: 1, uidNext: 1 };
+    },
+    async fetchOne() {
+      return null;
+    },
+    async idle() {
+      await new Promise(() => {});
+    },
+    async cancelIdle() {},
+    async logout() {},
+  };
+  const stopSignal = { stopped: false };
+  const sleeper = async (ms) => {
+    if (ms === REQUEST_POLL_MS) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return;
+    }
+    delays.push(ms);
+    if (ms >= 5000) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+  };
+
+  const loop = runAccountLoop({
+    account: baseAccount(),
+    secrets: inlineResolver(),
+    imapFactory: () => failImap,
+    log: () => {},
+    stopSignal,
+    sleeper,
+  });
+
+  await waitFor(
+    () => delays.filter((d) => d === 5000 || d === 10000 || d === 20000).length >= 3,
+    10000,
+  );
+  await stopLoops(stopSignal, loop);
+
+  const reconnect = delays.filter((d) => d === 5000 || d === 10000 || d === 20000);
+  assert.deepEqual(reconnect.slice(0, 3), [5000, 10000, 20000]);
+  assert.ok(connectCalls >= 3);
+});
+
 test('AC17: full disk on one account leaves checkpoint; other account still saves', async () => {
   const mailA = tempDir('snail-disk-a-');
   const mailB = tempDir('snail-disk-b-');
@@ -699,6 +753,106 @@ test('build --version lines match build stamp', () => {
     fs.unlinkSync(path.join(root, 'build-stamp.json'));
   } catch {
     /* ignore */
+  }
+});
+
+test('AC5: pending webhook on one account does not block another', async () => {
+  const mailA = tempDir('snail-dn-ac5a-');
+  const mailB = tempDir('snail-dn-ac5b-');
+  for (const [dir, last] of [
+    [mailA, 99],
+    [mailB, 100],
+  ]) {
+    fs.writeFileSync(
+      path.join(dir, '.snail-state.json'),
+      JSON.stringify({
+        uidValidity: 1,
+        notifyBoundary: 100,
+        backlogUid: 0,
+        lastUid: last,
+      }),
+      { mode: 0o600 }
+    );
+  }
+  const { upsertNotifyItem, isoFromMs } = require('../src/notify-ledger.js');
+  upsertNotifyItem(mailA, {
+    notify_id: 'work/1/100',
+    account: 'work',
+    uid: 100,
+    uid_validity: 1,
+    file: 'a.json',
+    attempts: 0,
+    last_status: 'none',
+    next_attempt_at: isoFromMs(0),
+    request_id: 'req-a',
+  });
+  fs.writeFileSync(path.join(mailA, 'a.json'), JSON.stringify({ from: 'a@x.com', subject: 'A' }), {
+    mode: 0o600,
+  });
+
+  /** @type {(() => void) | undefined} */
+  let releaseWebhookA;
+  /** @type {(() => void) | undefined} */
+  let releasePollA;
+  const delaysB = [];
+  const sleeperA = async (ms) => {
+    if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS) {
+      await new Promise((resolve) => {
+        releaseWebhookA = resolve;
+      });
+    }
+    if (ms === REQUEST_POLL_MS) {
+      await new Promise((resolve) => {
+        releasePollA = resolve;
+      });
+    }
+  };
+  const stopA = { stopped: false };
+  const stopB = { stopped: false };
+  let postsB = 0;
+  const loopA = runAccountLoop({
+    account: baseAccount({ name: 'alpha', mail_dir: mailA }),
+    secrets: inlineResolver(),
+    imapFactory: () => createFakeImapClient({ uidNext: 101, uidValidity: 1 }),
+    log: () => {},
+    fetchImpl: () => new Promise(() => {}),
+    sleeper: sleeperA,
+    stopSignal: stopA,
+    stopAfterSync: true,
+  });
+  const loopB = runAccountLoop({
+    account: baseAccount({ name: 'beta', mail_dir: mailB }),
+    secrets: inlineResolver(),
+    imapFactory: () =>
+      createFakeImapClient({
+        uidNext: 102,
+        uidValidity: 1,
+        messages: {
+          101: {
+            body: 'body',
+            subject: 'B',
+            from: [{ address: 'b@example.com' }],
+          },
+        },
+      }),
+    log: () => {},
+    fetchImpl: async () => {
+      postsB += 1;
+      return new Response(null, { status: 204 });
+    },
+    sleeper: webhookFriendlySleeper(delaysB),
+    stopSignal: stopB,
+    stopAfterSync: true,
+  });
+  try {
+    await waitFor(() => releaseWebhookA !== undefined, 5000);
+    await waitFor(() => postsB >= 1, 5000);
+    assert.ok(!delaysB.includes(WEBHOOK_ATTEMPT_TIMEOUT_MS));
+  } finally {
+    releaseWebhookA?.();
+    releasePollA?.();
+    await stopLoops(stopA, loopA);
+    await stopLoops(stopB, loopB);
   }
 });
 

@@ -8,9 +8,7 @@ const {
   readNotifyLedger,
   upsertNotifyItem,
   removeNotifyItem,
-  dueNotifyItems,
   msUntilNextDue,
-  msUntilNextDueAll,
   notifyDelayMs,
   isoFromMs,
   msFromIso,
@@ -25,7 +23,7 @@ const { notifyWebhookOnce, buildWebhookBody } = require('./notifiers/webhook.js'
 const { notifyOpenClawWakeOnce } = require('./notifiers/openclaw.js');
 const { readSnailState, writeSnailState } = require('./mail-store.js');
 
-const REQUEST_POLL_MS = 1000;
+const REQUEST_POLL_MS = 900;
 
 /**
  * One poll loop per account. `waitForRequest` is used inside each `raceIdle` without starting new loops.
@@ -76,6 +74,9 @@ function createRedeliverPollWatcher(opts) {
       stopped = true;
       wakeWaiters();
     },
+    discardPendingWaiters() {
+      waiters = [];
+    },
     waitForRequest() {
       if (stopped || opts.stopSignal.stopped) {
         return Promise.resolve();
@@ -107,6 +108,46 @@ function createNotifyDelivery(ctx) {
   const now = ctx.now ?? (() => Date.now());
   const mailDir = ctx.account.mail_dir;
   let lastLoggedCount = -1;
+  /** @type {Map<string, number>} */
+  const removalHoldUntil = new Map();
+
+  /**
+   * @param {import('./notify-ledger.js').NotifyLedgerItem} row
+   * @param {number} nowMs
+   */
+  function effectiveDueMs(row, nowMs) {
+    const hold = removalHoldUntil.get(row.notify_id);
+    const at = msFromIso(row.next_attempt_at);
+    if (hold != null && hold > at) {
+      return hold;
+    }
+    return at;
+  }
+
+  /**
+   * @param {import('./notify-ledger.js').NotifyLedgerItem[]} items
+   * @param {number} nowMs
+   */
+  function dueRows(items, nowMs) {
+    return items.filter((row) => effectiveDueMs(row, nowMs) <= nowMs);
+  }
+
+  /**
+   * @param {import('./notify-ledger.js').NotifyLedgerItem[]} ledgerItems
+   * @param {import('./notify-ledger.js').NotifyLedgerItem[]} retryItems
+   * @param {number} nowMs
+   */
+  function msUntilNextDueEffective(ledgerItems, retryItems, nowMs) {
+    const merged = [...ledgerItems, ...retryItems];
+    if (merged.length === 0) return null;
+    let soonest = Infinity;
+    for (const row of merged) {
+      const t = effectiveDueMs(row, nowMs);
+      if (t <= nowMs) return 0;
+      if (t < soonest) soonest = t;
+    }
+    return soonest === Infinity ? null : Math.max(0, soonest - nowMs);
+  }
 
   function outstandingTotal() {
     let n = 0;
@@ -251,6 +292,7 @@ function createNotifyDelivery(ctx) {
     if (result.ok) {
       try {
         removeNotifyItem(mailDir, row.notify_id, fsImpl);
+        removalHoldUntil.delete(row.notify_id);
         ctx.log(`notify ok uid ${row.uid} attempts ${attemptNum}`);
         logOutstandingCount({ force: true });
       } catch {
@@ -266,8 +308,10 @@ function createNotifyDelivery(ctx) {
             },
             fsImpl
           );
+          removalHoldUntil.delete(row.notify_id);
           ctx.log(`notify failed uid ${row.uid} attempts ${attemptNum} status ledger`);
         } catch {
+          removalHoldUntil.set(row.notify_id, nextMs);
           ctx.log(`notify failed uid ${row.uid} attempts ${attemptNum} status ledger`);
         }
       }
@@ -333,31 +377,47 @@ function createNotifyDelivery(ctx) {
         await attemptRow(written);
       }
     } catch {
-      const { attempts } = upsertLedgerRetryItem(mailDir, { ...row, request_id: requestId }, now(), fsImpl);
-      ctx.log(`notify failed uid ${row.uid} attempts ${attempts} status ledger`);
+      try {
+        const { attempts } = upsertLedgerRetryItem(
+          mailDir,
+          { ...row, request_id: requestId },
+          now(),
+          fsImpl
+        );
+        ctx.log(`notify failed uid ${row.uid} attempts ${attempts} status ledger`);
+      } catch {
+        ctx.log(`notify failed uid ${row.uid} attempts ${row.attempts || 0} status ledger`);
+      }
     }
   }
 
   async function runDueTurn() {
-    let items;
-    let retryItems;
+    let retryItems = [];
     try {
-      items = readNotifyLedger(mailDir, fsImpl);
       retryItems = readLedgerRetryQueue(mailDir, fsImpl);
     } catch {
+      ctx.log('notify ledger retry unreadable');
+      retryItems = [];
+    }
+    let items;
+    try {
+      items = readNotifyLedger(mailDir, fsImpl);
+    } catch {
+      ctx.log('notify failed uid 0 attempts 0 status ledger');
       return;
     }
     const nowMs = now();
-    const dueRetry = dueNotifyItems(retryItems, nowMs);
+    const dueRetry = dueRows(retryItems, nowMs);
     for (const row of dueRetry) {
       await attemptLedgerRetryRow(row);
     }
     try {
       items = readNotifyLedger(mailDir, fsImpl);
     } catch {
+      ctx.log('notify failed uid 0 attempts 0 status ledger');
       return;
     }
-    const due = dueNotifyItems(items, nowMs);
+    const due = dueRows(items, nowMs);
     for (const row of due) {
       await attemptRow(row);
     }
@@ -506,13 +566,22 @@ function createNotifyDelivery(ctx) {
   }
 
   function msUntilDelivery() {
+    const nowMs = now();
+    let retryItems = [];
     try {
-      const items = readNotifyLedger(mailDir, fsImpl);
-      const retryItems = readLedgerRetryQueue(mailDir, fsImpl);
-      return msUntilNextDueAll(items, retryItems, now());
+      retryItems = readLedgerRetryQueue(mailDir, fsImpl);
     } catch {
+      ctx.log('notify ledger retry unreadable');
+      retryItems = [];
+    }
+    let items;
+    try {
+      items = readNotifyLedger(mailDir, fsImpl);
+    } catch {
+      ctx.log('notify failed uid 0 attempts 0 status ledger');
       return null;
     }
+    return msUntilNextDueEffective(items, retryItems, nowMs);
   }
 
   function outstandingCount() {
@@ -538,5 +607,5 @@ function createNotifyDelivery(ctx) {
 module.exports = {
   createNotifyDelivery,
   createRedeliverPollWatcher,
-  REQUEST_POLL_MS: 1000,
+  REQUEST_POLL_MS: 900,
 };

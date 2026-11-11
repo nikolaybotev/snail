@@ -595,24 +595,30 @@ function createMailStore(options) {
           nextState = updateState(state, { lastUid: uid });
         } catch {
           const notifyIdOnStateFail = buildNotifyId(accountName, uidValidity, uid);
-          const { attempts } = upsertLedgerRetryItem(
-            mailDir,
-            {
-              notify_id: notifyIdOnStateFail,
-              account: accountName,
-              uid,
-              uid_validity: uidValidity,
-              file: basename,
-              attempts: 0,
-              last_status: 'none',
-              next_attempt_at: isoFromMs(nowMs()),
-              request_id: requestId,
-            },
-            nowMs(),
-            fsImpl
-          );
-          if (accountLog) {
-            accountLog(`notify failed uid ${uid} attempts ${attempts} status ledger`);
+          try {
+            const { attempts } = upsertLedgerRetryItem(
+              mailDir,
+              {
+                notify_id: notifyIdOnStateFail,
+                account: accountName,
+                uid,
+                uid_validity: uidValidity,
+                file: basename,
+                attempts: 0,
+                last_status: 'none',
+                next_attempt_at: isoFromMs(nowMs()),
+                request_id: requestId,
+              },
+              nowMs(),
+              fsImpl
+            );
+            if (accountLog) {
+              accountLog(`notify failed uid ${uid} attempts ${attempts} status ledger`);
+            }
+          } catch {
+            if (accountLog) {
+              accountLog(`notify failed uid ${uid} attempts 0 status ledger`);
+            }
           }
           return { attemptNotify: false, state };
         }
@@ -620,23 +626,29 @@ function createMailStore(options) {
       return { attemptNotify: true, state: nextState };
     } catch {
       const notifyId = buildNotifyId(accountName, uidValidity, uid);
-      const { attempts } = upsertLedgerRetryItem(
-        mailDir,
-        {
-          notify_id: notifyId,
-          account: accountName,
-          uid,
-          uid_validity: uidValidity,
-          file: basename,
-          attempts: 0,
-          last_status: 'none',
-          next_attempt_at: isoFromMs(nowMs()),
-        },
-        nowMs(),
-        fsImpl
-      );
-      if (accountLog) {
-        accountLog(`notify failed uid ${uid} attempts ${attempts} status ledger`);
+      try {
+        const { attempts } = upsertLedgerRetryItem(
+          mailDir,
+          {
+            notify_id: notifyId,
+            account: accountName,
+            uid,
+            uid_validity: uidValidity,
+            file: basename,
+            attempts: 0,
+            last_status: 'none',
+            next_attempt_at: isoFromMs(nowMs()),
+          },
+          nowMs(),
+          fsImpl
+        );
+        if (accountLog) {
+          accountLog(`notify failed uid ${uid} attempts ${attempts} status ledger`);
+        }
+      } catch {
+        if (accountLog) {
+          accountLog(`notify failed uid ${uid} attempts 0 status ledger`);
+        }
       }
       return { attemptNotify: false, state };
     }

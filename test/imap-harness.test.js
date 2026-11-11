@@ -151,6 +151,10 @@ function createHarnessSleeper(options = {}) {
 
   const sleeper = async (ms) => {
     delays.push(ms);
+    if (ms === REQUEST_POLL_MS) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return;
+    }
     if (ms === IDLE_KEEPALIVE_MS) {
       await new Promise((resolve) => {
         releaseKeepalive = resolve;
@@ -172,12 +176,6 @@ function createHarnessSleeper(options = {}) {
       }
       await new Promise((resolve) => {
         releaseWebhookSleep = resolve;
-      });
-      return;
-    }
-    if (ms === REQUEST_POLL_MS) {
-      await new Promise((resolve) => {
-        releaseRequestPoll = resolve;
       });
       return;
     }
@@ -514,13 +512,16 @@ test('AC5: connect failures double reconnect delay then reset after success', se
       ],
     },
   );
-  await waitFor(() => fr14.delays.includes(5000), 15000);
-  await waitFor(() => fr14.delays.includes(10000), 15000);
-  assert.ok(fr14.delays.indexOf(10000) > fr14.delays.indexOf(5000));
-  assert.ok(!fr14.delays.includes(0));
-  imap.trackSessions();
-  await stopHarness(sup, fr14);
-  await imap.close();
+  try {
+    await waitFor(() => fr14.delays.includes(5000), 15000);
+    await waitFor(() => fr14.delays.includes(10000), 15000);
+    assert.ok(fr14.delays.indexOf(10000) > fr14.delays.indexOf(5000));
+    assert.ok(!fr14.delays.includes(0));
+    imap.trackSessions();
+  } finally {
+    await stopHarness(sup, fr14);
+    await imap.close();
+  }
 });
 
 test('AC5: UNAVAILABLE and recovered drop sleep 5000 without doubling', serial, async () => {

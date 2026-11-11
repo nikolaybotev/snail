@@ -261,6 +261,7 @@ test('config reloaded is logged before other account reconnects', serial, async 
     await waitFor(() => logs.some((l) => l.includes('config reloaded')), 2000);
     await waitFor(() => factoryCalls.beta >= 1, 5000);
     await waitFor(() => factoryCalls.alpha >= 2, 5000);
+    assert.equal(factoryCalls.beta, 1);
     const reloadedIdx = logs.findIndex((l) => l.includes('config reloaded'));
     const betaReconnectIdx = logs.findIndex(
       (l, i) => i > reloadedIdx && l.includes('[beta]') && l.includes('starting')

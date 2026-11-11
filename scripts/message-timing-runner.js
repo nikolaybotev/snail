@@ -274,6 +274,11 @@ async function runMainFlow() {
     await waitFor(() => mock.notifyCalls >= 1, 15000);
 
     assert.ok(!/\buid\b/.test(existsLine));
+    await waitFor(() => {
+      const existsIdx = mock.sequence.indexOf(existsLine);
+      const open2Idx = mock.sequence.indexOf('__mailboxOpen_2__');
+      return open2Idx > existsIdx;
+    }, 15000);
     const tail = mock.sequence.slice(beforeExistsLen);
     assertOrderedSubsequence(tail, [
       existsLine,

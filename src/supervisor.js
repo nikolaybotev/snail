@@ -218,21 +218,6 @@ async function runAccountLoop(ctx) {
     fs: ctx.fs,
   });
 
-  const pollWatcher = createRedeliverPollWatcher({
-    mailDir: account.mail_dir,
-    pollMs: REQUEST_POLL_MS,
-    sleeper,
-    stopSignal,
-    fsImpl: ctx.fs ?? fs,
-  });
-  pollWatcher.start();
-
-  if (delivery.outstandingCount() > 0) {
-    delivery.logOutstandingCount({ force: true });
-  }
-  await delivery.applyRedeliverRequests();
-  await delivery.runDueTurn();
-
   const store = createMailStore({
     mailDir: account.mail_dir,
     textLimit: account.textLimit,
@@ -253,7 +238,25 @@ async function runAccountLoop(ctx) {
 
   let connectBackoff = CONNECT_INITIAL_BACKOFF_MS;
 
+  /** @type {ReturnType<typeof createRedeliverPollWatcher> | null} */
+  let pollWatcher = null;
+
   try {
+  pollWatcher = createRedeliverPollWatcher({
+    mailDir: account.mail_dir,
+    pollMs: REQUEST_POLL_MS,
+    sleeper,
+    stopSignal,
+    fsImpl: ctx.fs ?? fs,
+  });
+  pollWatcher.start();
+
+  if (delivery.outstandingCount() > 0) {
+    delivery.logOutstandingCount({ force: true });
+  }
+  await delivery.applyRedeliverRequests();
+  await delivery.runDueTurn();
+
   while (!stopSignal.stopped) {
     try {
       await imapClient.connect();
@@ -422,7 +425,7 @@ async function runAccountLoop(ctx) {
   }
 
   } finally {
-    pollWatcher.stop();
+    pollWatcher?.stop();
   }
 
   if (openclawClient) {
@@ -554,8 +557,10 @@ async function raceIdle(client, idleKeepaliveMs, keepaliveAnchor, now, sleeper, 
       sleeper(extra.deliveryMs).then(() => (raceDone.value ? never : 'delivery'))
     );
   }
+  /** @type {string | undefined} */
+  let result;
   try {
-    const result = await Promise.race([idlePromise, stopPromise, ...timerPromises]);
+    result = await Promise.race([idlePromise, stopPromise, ...timerPromises]);
     if (
       result === 'keepalive' ||
       result === 'stop' ||
@@ -571,6 +576,9 @@ async function raceIdle(client, idleKeepaliveMs, keepaliveAnchor, now, sleeper, 
     raceDone.value = true;
     if (stopInterval) {
       clearInterval(stopInterval);
+    }
+    if (result !== 'poll' && extra?.pollWatcher?.discardPendingWaiters) {
+      extra.pollWatcher.discardPendingWaiters();
     }
   }
 }

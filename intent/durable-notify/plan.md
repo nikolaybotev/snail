@@ -22,7 +22,7 @@ None. The ledger file is D1. `lastUid` after the row is D2. The delay sequence i
 4. Apply those findings the same way.
 5. Start Phase 1 only after both reviews are applied and the build is requested. Phase 1 uses Composer 2.5. If that model cannot be launched, stop and ask.
 
-Phase 1 is a new branch from this branch, and one pull request. It contains this folder and the delivery change. Squash-merge that pull request only, and only when the required checks `test` and `javascript` have succeeded. A cancelled check has not succeeded. Do not merge while either required check is missing, pending, failed, or cancelled. Do not use an admin override. Do not add `release:minor` or `release:major`. That merge publishes the next patch (D8). This pull request stays unmerged.
+This pull request (`#25`, branch `cursor/durable-notify-4d40`) contains this folder and the Phase 1 delivery implementation. Squash-merge it only when the required checks `test` and `javascript` have succeeded. A cancelled check has not succeeded. Do not merge while either required check is missing, pending, failed, or cancelled. Do not use an admin override. Do not add `release:minor` or `release:major`. That merge publishes the next patch (D8).
 
 ## Acceptance-criteria coverage
 

@@ -286,3 +286,120 @@ test('redeliver poll watcher stops with account', async () => {
   await new Promise((r) => setTimeout(r, 120));
   assert.ok(delays.length <= n + 2);
 });
+
+test('AC1: 400 responses advance next_attempt_at by NOTIFY_DELAY_MS', async () => {
+  const mailDir = tempDir();
+  const fname = 'f.json';
+  fs.writeFileSync(path.join(mailDir, fname), JSON.stringify({ from: 'a@x.com', subject: 'S' }), {
+    mode: 0o600,
+  });
+  let nowMs = 5_000_000;
+  const delivery = createNotifyDelivery({
+    account: baseAccount(mailDir),
+    notifierSecret: 'sec',
+    openclawClient: null,
+    log: () => {},
+    fetchImpl: async () => new Response(null, { status: 400 }),
+    sleeper: makeDeliverySleeper(),
+    now: () => nowMs,
+  });
+  upsertNotifyItem(mailDir, {
+    notify_id: 'work/1/11',
+    account: 'work',
+    uid: 11,
+    uid_validity: 1,
+    file: fname,
+    attempts: 0,
+    last_status: 'none',
+    next_attempt_at: isoFromMs(nowMs),
+    request_id: 'req-ac1',
+  });
+  for (let i = 0; i < NOTIFY_DELAY_MS.length; i += 1) {
+    const row = readNotifyLedger(mailDir)[0];
+    upsertNotifyItem(mailDir, { ...row, next_attempt_at: isoFromMs(nowMs) });
+    await delivery.runDueTurn();
+    const after = readNotifyLedger(mailDir)[0];
+    assert.equal(after.attempts, i + 1);
+    assert.equal(after.last_status, '400');
+    const expectedNext = nowMs + NOTIFY_DELAY_MS[i];
+    assert.equal(after.next_attempt_at, isoFromMs(expectedNext));
+    nowMs = expectedNext;
+  }
+  activeWebhookSleeper?.releasePending?.();
+  activeWebhookSleeper = null;
+});
+
+test('corrupt retry queue still delivers main ledger rows', async () => {
+  const mailDir = tempDir();
+  const fname = 'f.json';
+  fs.writeFileSync(path.join(mailDir, fname), JSON.stringify({ from: 'a@x.com', subject: 'S' }), {
+    mode: 0o600,
+  });
+  fs.writeFileSync(path.join(mailDir, '.snail-notify-ledger-retry.json'), '{not-json', { mode: 0o600 });
+  upsertNotifyItem(mailDir, {
+    notify_id: 'work/1/12',
+    account: 'work',
+    uid: 12,
+    uid_validity: 1,
+    file: fname,
+    attempts: 0,
+    last_status: 'none',
+    next_attempt_at: isoFromMs(0),
+    request_id: 'req-corrupt',
+  });
+  const logs = [];
+  let posts = 0;
+  const delivery = createNotifyDelivery({
+    account: baseAccount(mailDir),
+    notifierSecret: 'sec',
+    openclawClient: null,
+    log: (line) => logs.push(line),
+    fetchImpl: async () => {
+      posts += 1;
+      return new Response(null, { status: 204 });
+    },
+    now: () => 0,
+    sleeper: makeDeliverySleeper(),
+  });
+  await delivery.runDueTurn();
+  assert.ok(logs.some((l) => l.includes('notify ledger retry unreadable')));
+  assert.equal(posts, 1);
+  assert.equal(readNotifyLedger(mailDir).length, 0);
+  activeWebhookSleeper?.releasePending?.();
+  activeWebhookSleeper = null;
+});
+
+test('AC9: runDueTurn skips saved file at or below lastUid without a row', async () => {
+  const mailDir = tempDir();
+  const fname = '20260101T120000Z_1_0000000099.json';
+  fs.writeFileSync(
+    path.join(mailDir, '.snail-state.json'),
+    JSON.stringify({
+      uidValidity: 1,
+      notifyBoundary: 50,
+      backlogUid: 0,
+      lastUid: 100,
+    }),
+    { mode: 0o600 }
+  );
+  fs.writeFileSync(path.join(mailDir, fname), JSON.stringify({ from: 'a@x.com', subject: 'old' }), {
+    mode: 0o600,
+  });
+  let posts = 0;
+  const delivery = createNotifyDelivery({
+    account: baseAccount(mailDir),
+    notifierSecret: 'sec',
+    openclawClient: null,
+    log: () => {},
+    fetchImpl: async () => {
+      posts += 1;
+      return new Response(null, { status: 204 });
+    },
+    now: () => 0,
+    sleeper: makeDeliverySleeper(),
+  });
+  await delivery.runDueTurn();
+  assert.equal(posts, 0);
+  activeWebhookSleeper?.releasePending?.();
+  activeWebhookSleeper = null;
+});

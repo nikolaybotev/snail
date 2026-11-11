@@ -16,7 +16,7 @@ const {
   createMailStore,
   STATE_BASENAME,
 } = require('../src/mail-store.js');
-const { readNotifyLedger } = require('../src/notify-ledger.js');
+const { readNotifyLedger, upsertNotifyItem, isoFromMs } = require('../src/notify-ledger.js');
 
 function tempMailDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'snail-mail-'));
@@ -91,6 +91,33 @@ test('AC17: UID below notifyBoundary is saved and not woken when lastUid is stil
   const after = readSnailState(mailDir);
   assert.equal(after.backlogUid, 10);
   assert.equal(after.lastUid, 99);
+});
+
+test('AC6: uidValidity change leaves an older ledger row in place', () => {
+  const mailDir = tempMailDir();
+  upsertNotifyItem(mailDir, {
+    notify_id: 'work/1/55',
+    account: 'work',
+    uid: 55,
+    uid_validity: 1,
+    file: 'old.json',
+    attempts: 1,
+    last_status: '500',
+    next_attempt_at: isoFromMs(0),
+    request_id: 'req-old',
+  });
+  const store = createMailStore({
+    mailDir,
+    textLimit: 10000,
+    htmlLimit: 100000,
+    attachmentLimit: 10485760,
+    accountName: 'work',
+  });
+  store.ensureMailboxState(2, 60);
+  const items = readNotifyLedger(mailDir);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].notify_id, 'work/1/55');
+  assert.equal(items[0].uid_validity, 1);
 });
 
 test('AC17: new UID at or above boundary is woken while backlog is in progress', async () => {
