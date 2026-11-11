@@ -95,6 +95,13 @@ test('AC17: UID below notifyBoundary is saved and not woken when lastUid is stil
 
 test('AC6: uidValidity change keeps ledger row; resync save adds no row', async () => {
   const mailDir = tempMailDir();
+  const { writeSnailState } = require('../src/mail-store.js');
+  writeSnailState(mailDir, {
+    uidValidity: 2,
+    notifyBoundary: 55,
+    backlogUid: 0,
+    lastUid: 55,
+  });
   upsertNotifyItem(mailDir, {
     notify_id: 'work/1/55',
     account: 'work',
@@ -113,21 +120,21 @@ test('AC6: uidValidity change keeps ledger row; resync save adds no row', async 
     attachmentLimit: 10485760,
     accountName: 'work',
   });
-  store.ensureMailboxState(2, 60);
   const resync = await store.saveOneMessage({
-    uid: 10,
+    uid: 56,
     uidValidity: 1,
-    body: 'resync-under-new-validity',
+    body: 'resync-under-old-validity',
     subject: 'resync',
     from: [{ address: 'a@example.com' }],
   });
   assert.equal(resync.attemptNotify, false);
   assert.equal(resync.saved, true);
+  assert.equal(readSnailState(mailDir).backlogUid, 0);
   const items = readNotifyLedger(mailDir);
   assert.equal(items.length, 1);
   assert.equal(items[0].notify_id, 'work/1/55');
   assert.equal(items[0].uid_validity, 1);
-  assert.ok(!items.some((r) => r.notify_id === 'work/1/10'));
+  assert.ok(!items.some((r) => r.notify_id === 'work/2/56'));
 });
 
 test('both ledger writes fail: lastUid does not advance past uid', async () => {

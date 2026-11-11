@@ -388,7 +388,10 @@ function createNotifyDelivery(ctx) {
         );
         ctx.log(`notify failed uid ${row.uid} attempts ${attempts} status ledger`);
       } catch {
-        ctx.log(`notify failed uid ${row.uid} attempts ${row.attempts || 0} status ledger`);
+        const attempts = (row.attempts || 0) + 1;
+        const nextMs = now() + notifyDelayMs(attempts);
+        removalHoldUntil.set(row.notify_id, nextMs);
+        ctx.log(`notify failed uid ${row.uid} attempts ${attempts} status ledger`);
       }
     }
   }

@@ -487,6 +487,9 @@ async function syncMessages(client, store, state, uidNext, reload, logFn, mailbo
       },
     });
     if (saveResult.syncAborted) {
+      if (reload?.renameInProgress) {
+        reload.renameInProgress.value = false;
+      }
       throw new Error('ledger sync aborted');
     }
     if (saveResult.newLedgerRow && delivery) {
