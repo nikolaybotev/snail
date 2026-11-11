@@ -13,8 +13,7 @@ const {
 } = require('./secrets.js');
 const { OpenClawClient } = require('./notifiers/openclaw.js');
 const { defaultSleeper } = require('./notifiers/retry.js');
-const { createNotifyDelivery, REQUEST_POLL_MS } = require('./notify-delivery.js');
-const { hasRedeliverRequestFiles } = require('./notify-ledger.js');
+const { createNotifyDelivery, createRedeliverPollWatcher, REQUEST_POLL_MS } = require('./notify-delivery.js');
 
 const IDLE_KEEPALIVE_MS = 29 * 60 * 1000;
 const CONNECT_INITIAL_BACKOFF_MS = INITIAL_BACKOFF_MS;
@@ -219,8 +218,17 @@ async function runAccountLoop(ctx) {
     fs: ctx.fs,
   });
 
+  const pollWatcher = createRedeliverPollWatcher({
+    mailDir: account.mail_dir,
+    pollMs: REQUEST_POLL_MS,
+    sleeper,
+    stopSignal,
+    fsImpl: ctx.fs ?? fs,
+  });
+  pollWatcher.start();
+
   if (delivery.outstandingCount() > 0) {
-    delivery.logOutstandingCount();
+    delivery.logOutstandingCount({ force: true });
   }
   await delivery.applyRedeliverRequests();
   await delivery.runDueTurn();
@@ -245,6 +253,7 @@ async function runAccountLoop(ctx) {
 
   let connectBackoff = CONNECT_INITIAL_BACKOFF_MS;
 
+  try {
   while (!stopSignal.stopped) {
     try {
       await imapClient.connect();
@@ -289,7 +298,7 @@ async function runAccountLoop(ctx) {
         break;
       }
 
-      let idleEnteredAt = now();
+      let keepaliveAnchor = now();
       while (!stopSignal.stopped) {
         let deliveryMs = delivery.msUntilDelivery();
         if (deliveryMs === 0) {
@@ -300,15 +309,13 @@ async function runAccountLoop(ctx) {
         const idleResult = await raceIdle(
           imapClient,
           idleKeepaliveMs,
-          idleEnteredAt,
+          keepaliveAnchor,
           now,
           sleeper,
           stopSignal,
           {
-            pollMs: REQUEST_POLL_MS,
             deliveryMs,
-            mailDir: account.mail_dir,
-            fs: ctx.fs ?? fs,
+            pollWatcher,
           }
         );
         if (stopSignal.stopped || idleResult === 'stop') {
@@ -323,7 +330,23 @@ async function runAccountLoop(ctx) {
           }
           await delivery.applyRedeliverRequests();
           await delivery.runDueTurn();
-          idleEnteredAt = now();
+          const current = store.readState();
+          if (current) {
+            const mbCheck = await imapClient.mailboxOpen(account.mailbox);
+            const uidNextCheck = coerceImapInteger(mbCheck.uidNext);
+            if (uidsToSync(current, /** @type {number} */ (uidNextCheck)).length > 0) {
+              await syncMessages(
+                imapClient,
+                store,
+                current,
+                /** @type {number} */ (uidNextCheck),
+                reloadHooks(),
+                log,
+                account.mailbox,
+                delivery,
+              );
+            }
+          }
           continue;
         }
         if (idleResult === 'keepalive') {
@@ -331,11 +354,28 @@ async function runAccountLoop(ctx) {
             imapClient.cancelIdle();
           }
           if (delivery.outstandingCount() > 0) {
-            delivery.logOutstandingCount();
+            delivery.logOutstandingCount({ force: true });
           }
           await delivery.applyRedeliverRequests();
           await delivery.runDueTurn();
-          idleEnteredAt = now();
+          const currentK = store.readState();
+          if (currentK) {
+            const mbK = await imapClient.mailboxOpen(account.mailbox);
+            const uidNextK = coerceImapInteger(mbK.uidNext);
+            if (uidsToSync(currentK, /** @type {number} */ (uidNextK)).length > 0) {
+              await syncMessages(
+                imapClient,
+                store,
+                currentK,
+                /** @type {number} */ (uidNextK),
+                reloadHooks(),
+                log,
+                account.mailbox,
+                delivery,
+              );
+            }
+          }
+          keepaliveAnchor = now();
           continue;
         }
         if (idleResult === 'exists') {
@@ -360,7 +400,7 @@ async function runAccountLoop(ctx) {
           if (reloadState?.pending && !renameInProgress.value) {
             break;
           }
-          idleEnteredAt = now();
+          keepaliveAnchor = now();
           continue;
         }
         break;
@@ -379,6 +419,10 @@ async function runAccountLoop(ctx) {
         /* ignore */
       }
     }
+  }
+
+  } finally {
+    pollWatcher.stop();
   }
 
   if (openclawClient) {
@@ -449,8 +493,8 @@ async function syncMessages(client, store, state, uidNext, reload, logFn, mailbo
       await delivery.attemptAfterSave({
         uid: saveResult.uid,
         path: saveResult.path,
-        from: saveResult.wakeFrom ?? 'unknown',
-        subject: saveResult.wakeSubject ?? '(no subject)',
+        from: saveResult.wakeFrom,
+        subject: saveResult.wakeSubject,
         filename: saveResult.filename,
       });
     }
@@ -469,11 +513,12 @@ async function syncMessages(client, store, state, uidNext, reload, logFn, mailbo
  * @param {(ms: number) => Promise<void>} sleeper
  * @param {{ stopped: boolean }} [stopSignal]
  */
-async function raceIdle(client, idleKeepaliveMs, idleEnteredAt, now, sleeper, stopSignal, extra) {
+async function raceIdle(client, idleKeepaliveMs, keepaliveAnchor, now, sleeper, stopSignal, extra) {
   if (stopSignal?.stopped) {
     return 'stop';
   }
-  const elapsed = now() - idleEnteredAt;
+  const raceDone = { value: false };
+  const elapsed = now() - keepaliveAnchor;
   const remaining = Math.max(0, idleKeepaliveMs - elapsed);
   const idlePromise = client.idle().then(() => 'exists');
   let stopInterval;
@@ -491,26 +536,23 @@ async function raceIdle(client, idleKeepaliveMs, idleEnteredAt, now, sleeper, st
   });
   /** @type {Promise<string>[]} */
   const timerPromises = [];
+  const never = new Promise(() => {});
   if (remaining === 0) {
     timerPromises.push(Promise.resolve('keepalive'));
   } else {
-    timerPromises.push(sleeper(remaining).then(() => 'keepalive'));
-  }
-  if (extra?.pollMs != null && extra.pollMs > 0 && extra.mailDir) {
-    const pollFs = extra.fs ?? fs;
     timerPromises.push(
-      (async () => {
-        while (true) {
-          await sleeper(extra.pollMs);
-          if (hasRedeliverRequestFiles(extra.mailDir, pollFs)) {
-            return 'poll';
-          }
-        }
-      })()
+      sleeper(remaining).then(() => (raceDone.value ? never : 'keepalive'))
+    );
+  }
+  if (extra?.pollWatcher) {
+    timerPromises.push(
+      extra.pollWatcher.waitForRequest().then(() => (raceDone.value ? never : 'poll'))
     );
   }
   if (extra?.deliveryMs != null && extra.deliveryMs > 0) {
-    timerPromises.push(sleeper(extra.deliveryMs).then(() => 'delivery'));
+    timerPromises.push(
+      sleeper(extra.deliveryMs).then(() => (raceDone.value ? never : 'delivery'))
+    );
   }
   try {
     const result = await Promise.race([idlePromise, stopPromise, ...timerPromises]);
@@ -526,6 +568,7 @@ async function raceIdle(client, idleKeepaliveMs, idleEnteredAt, now, sleeper, st
     }
     return result;
   } finally {
+    raceDone.value = true;
     if (stopInterval) {
       clearInterval(stopInterval);
     }

@@ -235,7 +235,7 @@ function readLedgerRetryQueue(mailDir, fsImpl = fs) {
         typeof row.next_attempt_at === 'string'
     );
   } catch {
-    return [];
+    throw new Error('ledger retry unreadable');
   }
 }
 
@@ -319,7 +319,7 @@ function writeRedeliverRequest(mailDir, basename, fsImpl = fs) {
     fsImpl.mkdirSync(dir, { mode: 0o700 });
   }
   const id = crypto.randomBytes(8).toString('hex');
-  const tmp = path.join(dir, `req-${id}.tmp`);
+  const tmp = path.join(dir, `req-${id}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`);
   const final = path.join(dir, `req-${id}.json`);
   fsImpl.writeFileSync(tmp, JSON.stringify({ file: basename }), { mode: 0o600 });
   fsImpl.renameSync(tmp, final);

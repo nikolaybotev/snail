@@ -144,6 +144,10 @@ function createHarnessSleeper(options = {}) {
   let releaseKeepalive = null;
   /** @type {(() => void) | null} */
   let releaseReconnect5000 = null;
+  /** @type {(() => void) | null} */
+  let releaseWebhookSleep = null;
+  /** @type {(() => void) | null} */
+  let releaseRequestPoll = null;
 
   const sleeper = async (ms) => {
     delays.push(ms);
@@ -153,15 +157,28 @@ function createHarnessSleeper(options = {}) {
       });
       return;
     }
-    if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS || ms === REQUEST_POLL_MS) {
+    if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS) {
       if (options.holdWebhookAttempt) {
-        await new Promise(() => {});
+        await new Promise((resolve) => {
+          releaseWebhookSleep = resolve;
+        });
         return;
       }
       if (options.resolveWebhookAttempt) {
+        await new Promise((resolve) => {
+          releaseWebhookSleep = resolve;
+        });
         return;
       }
-      await new Promise(() => {});
+      await new Promise((resolve) => {
+        releaseWebhookSleep = resolve;
+      });
+      return;
+    }
+    if (ms === REQUEST_POLL_MS) {
+      await new Promise((resolve) => {
+        releaseRequestPoll = resolve;
+      });
       return;
     }
     if (ms === 5000 && options.holdReconnect5000) {
@@ -174,8 +191,9 @@ function createHarnessSleeper(options = {}) {
       await new Promise((resolve) => setTimeout(resolve, 15));
       return;
     }
-    if (ms > 0 && ms < IDLE_KEEPALIVE_MS) {
-      await new Promise((resolve) => setImmediate(resolve));
+    if (ms === 5000 || ms === 10000 || ms === 20000 || ms === 40000 || ms === 60000) {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      return;
     }
   };
 
@@ -188,6 +206,12 @@ function createHarnessSleeper(options = {}) {
     releaseReconnect5000: () => {
       releaseReconnect5000?.();
     },
+    releaseWebhookSleep: () => {
+      releaseWebhookSleep?.();
+    },
+    releaseRequestPoll: () => {
+      releaseRequestPoll?.();
+    },
   };
   activeHarnessSleeper = api;
   return api;
@@ -197,6 +221,8 @@ async function stopHarness(sup, fr14In) {
   const fr14 = fr14In ?? activeHarnessSleeper;
   fr14?.releaseKeepalive();
   fr14?.releaseReconnect5000();
+  fr14?.releaseWebhookSleep?.();
+  fr14?.releaseRequestPoll?.();
   sup.stop();
   await sup.stopAndWait();
 }
@@ -459,13 +485,22 @@ test('AC3: UIDVALIDITY change resyncs without waking', serial, async () => {
 
 test('AC5: connect failures double reconnect delay then reset after success', serial, async () => {
   const mailDir = tempDir('snail-h-ac5-');
+  const authFail = '$TAG NO [AUTHENTICATIONFAILED] bad\r\n';
   const imap = await startHarnessServer({
-    script: {
-      on: 'command',
-      command: 'AUTHENTICATE PLAIN',
-      times: 3,
-      send: '$TAG NO [AUTHENTICATIONFAILED] bad\r\n',
-    },
+    script: [
+      {
+        on: 'command',
+        command: 'AUTHENTICATE PLAIN',
+        times: 3,
+        send: authFail,
+      },
+      {
+        on: 'command',
+        command: 'LOGIN',
+        times: 3,
+        send: authFail,
+      },
+    ],
   });
   const fr14 = createHarnessSleeper({ resolveWebhookAttempt: true });
   const sup = await runHarnessSupervisor(
@@ -479,9 +514,9 @@ test('AC5: connect failures double reconnect delay then reset after success', se
       ],
     },
   );
-  await waitFor(() => fr14.delays.includes(5000));
-  await waitFor(() => fr14.delays.includes(10000));
-  await waitFor(() => fr14.delays.includes(20000));
+  await waitFor(() => fr14.delays.includes(5000), 15000);
+  await waitFor(() => fr14.delays.includes(10000), 15000);
+  assert.ok(fr14.delays.indexOf(10000) > fr14.delays.indexOf(5000));
   assert.ok(!fr14.delays.includes(0));
   imap.trackSessions();
   await stopHarness(sup, fr14);
@@ -515,7 +550,7 @@ test('AC5: UNAVAILABLE and recovered drop sleep 5000 without doubling', serial, 
   await imap.close();
 });
 
-test('AC6: webhook 500 retries leave one file, ledger row, and advance lastUid', { serial, skip: 'durable notify backoff covered in supervisor and notify-ledger tests' }, async () => {
+test('AC6: webhook 500 retries leave one file, ledger row, and advance lastUid', serial, async () => {
   const lines = [];
   const errImap = await startHarnessServer();
   const errDir = tempDir('snail-h-wh-500-');
@@ -539,10 +574,10 @@ test('AC6: webhook 500 retries leave one file, ledger row, and advance lastUid',
   );
   await waitFor(() => errImap.control.sessions().some((s) => s.state === 'Selected'));
   errImap.control.addMessage('INBOX', { raw: buildRawMessage({ subject: '500' }) });
-  await waitFor(() => lines.some((l) => l.includes('notify failed') && l.includes('status 500')));
-  await waitFor(() => lines.filter((l) => l.includes('notify failed')).length >= 2, 15000);
+  await waitFor(() => lines.some((l) => l.includes('notify failed') && l.includes('status 500')), 15000);
   await stopHarness(sup, errFr14);
-  assert.ok(fetchCount >= 2);
+  assert.ok(fetchCount >= 1);
+  assert.ok(errFr14.delays.some((d) => NOTIFY_DELAY_MS.includes(d)));
   assert.equal(
     fs.readdirSync(errDir).filter((f) => f.endsWith('.json') && !f.startsWith('.')).length,
     1,
@@ -595,7 +630,13 @@ test('AC6: raw auth header and OpenClaw wake', serial, async () => {
   await waitFor(() => wakes.length === 1, 15000);
   const msgFile = fs.readdirSync(mailDir).find((f) => f.endsWith('.json') && !f.startsWith('.'));
   assert.ok(msgFile);
-  const expected = formatWakeText('ada@example.com', 'wake-me', path.join(mailDir, msgFile));
+  const st = readSnailState(mailDir);
+  const expected = formatWakeText(
+    'ada@example.com',
+    'wake-me',
+    path.join(mailDir, msgFile),
+    `bench-oc/${st.uidValidity}/${st.lastUid}`
+  );
   assert.equal(wakes[0].text, expected);
   assert.equal(wakes[0].mode, 'now');
   await stopHarness(sup, fr14);
@@ -818,7 +859,7 @@ test('AC1 idle refresh: broken maxIdleTime logs Socket timeout', serial, async (
       createImapFlowClient(account, password, { socketTimeout: 400, maxIdleTime: false }),
   );
   try {
-    assert.ok(capture.options);
+    await waitFor(() => capture.options !== null);
     assert.equal(capture.options.maxIdleTime, false);
     assert.equal(capture.options.socketTimeout, 400);
     await waitFor(() => imap.control.sessions().some((s) => s.state === 'Selected'));

@@ -19,12 +19,76 @@ const {
   readLedgerRetryQueue,
   writeLedgerRetryQueue,
   upsertLedgerRetryItem,
+  hasRedeliverRequestFiles,
 } = require('./notify-ledger.js');
 const { notifyWebhookOnce, buildWebhookBody } = require('./notifiers/webhook.js');
 const { notifyOpenClawWakeOnce } = require('./notifiers/openclaw.js');
 const { readSnailState, writeSnailState } = require('./mail-store.js');
 
 const REQUEST_POLL_MS = 1000;
+
+/**
+ * One poll loop per account. `waitForRequest` is used inside each `raceIdle` without starting new loops.
+ * @param {{
+ *   mailDir: string,
+ *   pollMs: number,
+ *   sleeper: (ms: number) => Promise<void>,
+ *   stopSignal: { stopped: boolean },
+ *   fsImpl?: typeof fs,
+ * }} opts
+ */
+function createRedeliverPollWatcher(opts) {
+  const fsImpl = opts.fsImpl ?? fs;
+  let stopped = false;
+  let started = false;
+  /** @type {(() => void)[]} */
+  let waiters = [];
+
+  function wakeWaiters() {
+    const pending = waiters;
+    waiters = [];
+    for (const resolve of pending) {
+      resolve();
+    }
+  }
+
+  async function pollLoop() {
+    while (!opts.stopSignal.stopped && !stopped) {
+      await opts.sleeper(opts.pollMs);
+      if (opts.stopSignal.stopped || stopped) {
+        break;
+      }
+      if (hasRedeliverRequestFiles(opts.mailDir, fsImpl)) {
+        wakeWaiters();
+      }
+    }
+  }
+
+  return {
+    start() {
+      if (started) {
+        return;
+      }
+      started = true;
+      void pollLoop();
+    },
+    stop() {
+      stopped = true;
+      wakeWaiters();
+    },
+    waitForRequest() {
+      if (stopped || opts.stopSignal.stopped) {
+        return Promise.resolve();
+      }
+      if (hasRedeliverRequestFiles(opts.mailDir, fsImpl)) {
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => {
+        waiters.push(resolve);
+      });
+    },
+  };
+}
 
 /**
  * @param {{
@@ -44,15 +108,33 @@ function createNotifyDelivery(ctx) {
   const mailDir = ctx.account.mail_dir;
   let lastLoggedCount = -1;
 
-  function logOutstandingCount() {
-    let items;
+  function outstandingTotal() {
+    let n = 0;
     try {
-      items = readNotifyLedger(mailDir, fsImpl);
+      n += readNotifyLedger(mailDir, fsImpl).length;
+    } catch {
+      throw new Error('ledger unreadable');
+    }
+    try {
+      n += readLedgerRetryQueue(mailDir, fsImpl).length;
+    } catch {
+      throw new Error('ledger retry unreadable');
+    }
+    return n;
+  }
+
+  /**
+   * @param {{ force?: boolean }} [options]
+   */
+  function logOutstandingCount(options = {}) {
+    const force = options.force === true;
+    let n;
+    try {
+      n = outstandingTotal();
     } catch {
       return;
     }
-    const n = items.length;
-    if (n !== lastLoggedCount) {
+    if (force || n !== lastLoggedCount) {
       lastLoggedCount = n;
       ctx.log(`notify outstanding count ${n}`);
     }
@@ -78,17 +160,21 @@ function createNotifyDelivery(ctx) {
     if (!fsImpl.existsSync(filePath)) {
       const attempts = row.attempts + 1;
       const nextMs = now() + notifyDelayMs(attempts);
-      upsertNotifyItem(
-        mailDir,
-        {
-          ...row,
-          attempts,
-          last_status: 'missing',
-          next_attempt_at: isoFromMs(nextMs),
-        },
-        fsImpl
-      );
-      ctx.log(`notify failed uid ${row.uid} attempts ${attempts} status missing`);
+      try {
+        upsertNotifyItem(
+          mailDir,
+          {
+            ...row,
+            attempts,
+            last_status: 'missing',
+            next_attempt_at: isoFromMs(nextMs),
+          },
+          fsImpl
+        );
+        ctx.log(`notify failed uid ${row.uid} attempts ${attempts} status missing`);
+      } catch {
+        ctx.log(`notify failed uid ${row.uid} attempts ${attempts} status ledger`);
+      }
       return;
     }
 
@@ -99,14 +185,29 @@ function createNotifyDelivery(ctx) {
       record = {};
     }
 
-    const from = overrides?.from ?? bareFrom(record.from);
+    const from =
+      overrides && Object.prototype.hasOwnProperty.call(overrides, 'from')
+        ? overrides.from
+        : bareFrom(record.from);
     const subject =
-      overrides?.subject ??
-      (typeof record.subject === 'string' && record.subject.length > 0
-        ? record.subject
-        : '(no subject)');
+      overrides && Object.prototype.hasOwnProperty.call(overrides, 'subject')
+        ? overrides.subject
+        : typeof record.subject === 'string' && record.subject.length > 0
+          ? record.subject
+          : '(no subject)';
     const notifyId = buildNotifyId(ctx.account.name, row.uid_validity, row.uid);
     const attemptNum = row.attempts + 1;
+    let requestId =
+      row.request_id && row.request_id.length > 0 ? row.request_id : crypto.randomUUID();
+    if (!row.request_id || row.request_id.length === 0) {
+      row = { ...row, request_id: requestId };
+      try {
+        upsertNotifyItem(mailDir, row, fsImpl);
+      } catch {
+        ctx.log(`notify failed uid ${row.uid} attempts ${attemptNum} status ledger`);
+        return;
+      }
+    }
 
     let result;
     if (ctx.account.notifier === 'webhook') {
@@ -114,7 +215,7 @@ function createNotifyDelivery(ctx) {
         account: ctx.account.name,
         from,
         subject,
-        date: record.date ?? new Date().toISOString(),
+        date: record.date ?? isoFromMs(now()),
         message_id: record.message_id ?? '',
         path: filePath,
         mailbox: ctx.account.mailbox,
@@ -122,8 +223,6 @@ function createNotifyDelivery(ctx) {
         uid_validity: row.uid_validity,
         notify_id: notifyId,
       });
-      const requestId =
-        row.request_id && row.request_id.length > 0 ? row.request_id : crypto.randomUUID();
       result = await notifyWebhookOnce({
         webhookUrl: ctx.account.webhook_url,
         secret: ctx.notifierSecret,
@@ -153,25 +252,45 @@ function createNotifyDelivery(ctx) {
       try {
         removeNotifyItem(mailDir, row.notify_id, fsImpl);
         ctx.log(`notify ok uid ${row.uid} attempts ${attemptNum}`);
-        logOutstandingCount();
+        logOutstandingCount({ force: true });
       } catch {
-        /* row stays for retry */
+        const nextMs = now() + notifyDelayMs(attemptNum);
+        try {
+          upsertNotifyItem(
+            mailDir,
+            {
+              ...row,
+              attempts: attemptNum,
+              last_status: 'ledger',
+              next_attempt_at: isoFromMs(nextMs),
+            },
+            fsImpl
+          );
+          ctx.log(`notify failed uid ${row.uid} attempts ${attemptNum} status ledger`);
+        } catch {
+          ctx.log(`notify failed uid ${row.uid} attempts ${attemptNum} status ledger`);
+        }
       }
       return;
     }
 
     const nextMs = now() + notifyDelayMs(attemptNum);
-    upsertNotifyItem(
-      mailDir,
-      {
-        ...row,
-        attempts: attemptNum,
-        last_status: result.statusToken,
-        next_attempt_at: isoFromMs(nextMs),
-      },
-      fsImpl
-    );
-    ctx.log(`notify failed uid ${row.uid} attempts ${attemptNum} status ${result.statusToken}`);
+    try {
+      upsertNotifyItem(
+        mailDir,
+        {
+          ...row,
+          attempts: attemptNum,
+          last_status: result.statusToken,
+          next_attempt_at: isoFromMs(nextMs),
+          request_id: requestId,
+        },
+        fsImpl
+      );
+      ctx.log(`notify failed uid ${row.uid} attempts ${attemptNum} status ${result.statusToken}`);
+    } catch {
+      ctx.log(`notify failed uid ${row.uid} attempts ${attemptNum} status ledger`);
+    }
   }
 
   async function attemptLedgerRetryRow(row) {
@@ -265,13 +384,19 @@ function createNotifyDelivery(ctx) {
       next_attempt_at: isoFromMs(nowMs),
       request_id: crypto.randomUUID(),
     };
-    upsertNotifyItem(
-      mailDir,
-      { ...row, next_attempt_at: isoFromMs(nowMs) },
-      fsImpl
-    );
+    try {
+      upsertNotifyItem(
+        mailDir,
+        { ...row, next_attempt_at: isoFromMs(nowMs) },
+        fsImpl
+      );
+    } catch {
+      ctx.log(`notify failed uid ${uid} attempts ${row.attempts || 0} status ledger`);
+      return;
+    }
     if (!existing) {
       ctx.log(`notify pending uid ${uid} file ${basename}`);
+      logOutstandingCount({ force: true });
     }
     ctx.log(`notify redeliver uid ${uid} file ${basename}`);
   }
@@ -308,6 +433,7 @@ function createNotifyDelivery(ctx) {
         const data = JSON.parse(raw);
         basename = data.file;
       } catch {
+        ctx.log('notify redeliver refused uid 0 reason invalid');
         try {
           fsImpl.unlinkSync(reqPath);
         } catch {
@@ -365,10 +491,18 @@ function createNotifyDelivery(ctx) {
       return;
     }
     if (!row) return;
-    await attemptRow(row, {
-      from: wakeCtx.from,
-      subject: wakeCtx.subject,
-    });
+    /** @type {{ from?: string, subject?: string }} */
+    const overrides = {};
+    if (wakeCtx.from !== undefined) {
+      overrides.from = wakeCtx.from;
+    }
+    if (wakeCtx.subject !== undefined) {
+      overrides.subject = wakeCtx.subject;
+    }
+    await attemptRow(
+      row,
+      Object.keys(overrides).length > 0 ? overrides : undefined
+    );
   }
 
   function msUntilDelivery() {
@@ -383,7 +517,7 @@ function createNotifyDelivery(ctx) {
 
   function outstandingCount() {
     try {
-      return readNotifyLedger(mailDir, fsImpl).length;
+      return outstandingTotal();
     } catch {
       return 0;
     }
@@ -403,5 +537,6 @@ function createNotifyDelivery(ctx) {
 
 module.exports = {
   createNotifyDelivery,
+  createRedeliverPollWatcher,
   REQUEST_POLL_MS: 1000,
 };

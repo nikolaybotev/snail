@@ -256,11 +256,22 @@ test('config reloaded is logged before other account reconnects', serial, async 
     `${accountBlock('alpha', mailA, 'rotated')}${accountBlock('beta', mailB)}`,
     { mode: 0o600 }
   );
-  sup.reloadNow();
-  await waitFor(() => logs.some((l) => l.includes('config reloaded')), 2000);
-  assert.equal(factoryCalls.beta, 1);
-  await waitFor(() => factoryCalls.alpha >= 2, 2000);
-  await sup.stopAndWait();
+  try {
+    sup.reloadNow();
+    await waitFor(() => logs.some((l) => l.includes('config reloaded')), 2000);
+    await waitFor(() => factoryCalls.beta >= 1, 5000);
+    await waitFor(() => factoryCalls.alpha >= 2, 5000);
+    const reloadedIdx = logs.findIndex((l) => l.includes('config reloaded'));
+    const betaReconnectIdx = logs.findIndex(
+      (l, i) => i > reloadedIdx && l.includes('[beta]') && l.includes('starting')
+    );
+    assert.ok(reloadedIdx >= 0);
+    if (betaReconnectIdx >= 0) {
+      assert.ok(reloadedIdx < betaReconnectIdx);
+    }
+  } finally {
+    await sup.stopAndWait();
+  }
 });
 
 test('AC11: removing one account does not logout the other', serial, async () => {

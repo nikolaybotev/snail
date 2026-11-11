@@ -591,7 +591,31 @@ function createMailStore(options) {
       }
       let nextState = state;
       if (uid > state.lastUid) {
-        nextState = updateState(state, { lastUid: uid });
+        try {
+          nextState = updateState(state, { lastUid: uid });
+        } catch {
+          const notifyIdOnStateFail = buildNotifyId(accountName, uidValidity, uid);
+          const { attempts } = upsertLedgerRetryItem(
+            mailDir,
+            {
+              notify_id: notifyIdOnStateFail,
+              account: accountName,
+              uid,
+              uid_validity: uidValidity,
+              file: basename,
+              attempts: 0,
+              last_status: 'none',
+              next_attempt_at: isoFromMs(nowMs()),
+              request_id: requestId,
+            },
+            nowMs(),
+            fsImpl
+          );
+          if (accountLog) {
+            accountLog(`notify failed uid ${uid} attempts ${attempts} status ledger`);
+          }
+          return { attemptNotify: false, state };
+        }
       }
       return { attemptNotify: true, state: nextState };
     } catch {

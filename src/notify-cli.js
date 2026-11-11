@@ -9,6 +9,7 @@ const {
   writeRedeliverRequest,
   parseMessageBasename,
   buildNotifyId,
+  readLedgerRetryQueue,
 } = require('./notify-ledger.js');
 
 /**
@@ -27,7 +28,18 @@ function runNotifyList(config) {
       unreadable = true;
       continue;
     }
+    let retryItems = [];
+    try {
+      retryItems = readLedgerRetryQueue(account.mail_dir);
+    } catch {
+      console.error(`notify ledger retry unreadable account ${account.name}`);
+      unreadable = true;
+      continue;
+    }
     for (const row of items) {
+      rows.push(row);
+    }
+    for (const row of retryItems) {
       rows.push(row);
     }
   }
@@ -36,8 +48,18 @@ function runNotifyList(config) {
     if (a.uid_validity !== b.uid_validity) return a.uid_validity - b.uid_validity;
     return a.uid - b.uid;
   });
+  const seen = new Set();
   for (const row of rows) {
-    const state = row.attempts === 0 ? 'pending' : 'failed';
+    if (seen.has(row.notify_id)) {
+      continue;
+    }
+    seen.add(row.notify_id);
+    const state =
+      row.last_status === 'ledger'
+        ? 'ledger'
+        : row.attempts === 0
+          ? 'pending'
+          : 'failed';
     const lastStatus = row.last_status === 'none' && row.attempts === 0 ? 'none' : row.last_status;
     console.log(
       `account ${row.account} uid ${row.uid} uid_validity ${row.uid_validity} file ${row.file} state ${state} attempts ${row.attempts} last_status ${lastStatus} next_attempt ${row.next_attempt_at}`

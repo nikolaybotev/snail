@@ -171,7 +171,7 @@ async function idleTestSleeper(ms) {
   assert.equal(notifyCalls, 1);
   const msgFiles = fs
     .readdirSync(mailDir)
-    .filter((f) => f.endsWith('.json') && f !== '.snail-state.json');
+    .filter((f) => f.endsWith('.json') && !f.startsWith('.snail-'));
   assert.equal(msgFiles.length, 1);
   assert.ok(mockIdleResolve, 'mock idle() should stay pending');
   let idleSettled = false;

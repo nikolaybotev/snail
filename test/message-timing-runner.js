@@ -182,6 +182,7 @@ async function runMainFlow() {
     const { createImapFlowClient } = require('../snail.js');
     const { runAccountLoop, IDLE_KEEPALIVE_MS } = require('../src/supervisor.js');
     const { WEBHOOK_ATTEMPT_TIMEOUT_MS } = require('../src/notifiers/webhook.js');
+    const { REQUEST_POLL_MS } = require('../src/notify-delivery.js');
 
     const mailDir = tempDir('snail-msg-timing-');
     fs.writeFileSync(
@@ -238,7 +239,7 @@ async function runMainFlow() {
       },
       stopSignal,
       sleeper: async (ms) => {
-        if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS || ms >= IDLE_KEEPALIVE_MS) {
+        if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS || ms === REQUEST_POLL_MS || ms >= IDLE_KEEPALIVE_MS) {
           return new Promise(() => {});
         }
       },
@@ -324,6 +325,7 @@ async function runSpacesMailbox() {
     const { createImapFlowClient } = require('../snail.js');
     const { runAccountLoop, IDLE_KEEPALIVE_MS } = require('../src/supervisor.js');
     const { WEBHOOK_ATTEMPT_TIMEOUT_MS } = require('../src/notifiers/webhook.js');
+    const { REQUEST_POLL_MS } = require('../src/notify-delivery.js');
 
     const mailDir = tempDir('snail-msg-timing-sp-');
     fs.writeFileSync(
@@ -370,7 +372,7 @@ async function runSpacesMailbox() {
       fetchImpl: async () => new Response(null, { status: 204 }),
       stopSignal,
       sleeper: async (ms) => {
-        if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS || ms >= IDLE_KEEPALIVE_MS) {
+        if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS || ms === REQUEST_POLL_MS || ms >= IDLE_KEEPALIVE_MS) {
           return new Promise(() => {});
         }
       },
@@ -402,6 +404,7 @@ async function runArchivePath() {
     const { createImapFlowClient } = require('../snail.js');
     const { runAccountLoop, IDLE_KEEPALIVE_MS } = require('../src/supervisor.js');
     const { WEBHOOK_ATTEMPT_TIMEOUT_MS } = require('../src/notifiers/webhook.js');
+    const { REQUEST_POLL_MS } = require('../src/notify-delivery.js');
 
     const mailDir = tempDir('snail-msg-timing-ar-');
     fs.writeFileSync(
@@ -448,7 +451,7 @@ async function runArchivePath() {
       fetchImpl: async () => new Response(null, { status: 204 }),
       stopSignal,
       sleeper: async (ms) => {
-        if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS || ms >= IDLE_KEEPALIVE_MS) {
+        if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS || ms === REQUEST_POLL_MS || ms >= IDLE_KEEPALIVE_MS) {
           return new Promise(() => {});
         }
       },

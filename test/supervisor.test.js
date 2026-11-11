@@ -35,7 +35,12 @@ function tempDir(prefix) {
 
 function instantSleeper(delays) {
   return async (ms) => {
-    delays.push(ms);
+    if (ms === REQUEST_POLL_MS) {
+      return new Promise(() => {});
+    }
+    if (delays) {
+      delays.push(ms);
+    }
   };
 }
 
