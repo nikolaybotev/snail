@@ -11,9 +11,9 @@ const {
   INITIAL_BACKOFF_MS,
   MAX_BACKOFF_MS,
 } = require('./secrets.js');
-const { OpenClawClient, notifyOpenClawWake } = require('./notifiers/openclaw.js');
-const { buildWebhookBody, notifyWebhook } = require('./notifiers/webhook.js');
+const { OpenClawClient } = require('./notifiers/openclaw.js');
 const { defaultSleeper } = require('./notifiers/retry.js');
+const { createNotifyDelivery, createRedeliverPollWatcher, REQUEST_POLL_MS } = require('./notify-delivery.js');
 
 const IDLE_KEEPALIVE_MS = 29 * 60 * 1000;
 const CONNECT_INITIAL_BACKOFF_MS = INITIAL_BACKOFF_MS;
@@ -207,6 +207,17 @@ async function runAccountLoop(ctx) {
     }
   }
 
+  const delivery = createNotifyDelivery({
+    account,
+    notifierSecret,
+    openclawClient,
+    log,
+    fetchImpl: ctx.fetchImpl,
+    sleeper,
+    now,
+    fs: ctx.fs,
+  });
+
   const store = createMailStore({
     mailDir: account.mail_dir,
     textLimit: account.textLimit,
@@ -217,50 +228,7 @@ async function runAccountLoop(ctx) {
     accountLog: log,
     fs: ctx.fs,
     log: (line) => ctx.log(line),
-    onWake: async (wakeCtx) => {
-      let result;
-      if (account.notifier === 'webhook') {
-        const recordPath = wakeCtx.path;
-        let record;
-        try {
-          record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
-        } catch {
-          record = {};
-        }
-        const payload = buildWebhookBody({
-          account: account.name,
-          from: wakeCtx.from,
-          subject: wakeCtx.subject,
-          date: record.date ?? new Date().toISOString(),
-          message_id: record.message_id ?? '',
-          path: recordPath,
-          mailbox: account.mailbox,
-          uid: wakeCtx.uid,
-          uid_validity: record.uid_validity ?? store.readState()?.uidValidity ?? 0,
-        });
-        result = await notifyWebhook({
-          webhookUrl: account.webhook_url,
-          secret: notifierSecret,
-          webhookAuth: account.webhook_auth,
-          webhookHeader: account.webhook_header,
-          payload,
-          fetchImpl: ctx.fetchImpl,
-          sleeper,
-          log,
-        });
-      } else {
-        result = await notifyOpenClawWake({
-          client: openclawClient,
-          from: wakeCtx.from,
-          subject: wakeCtx.subject,
-          path: wakeCtx.path,
-          sleeper,
-        });
-      }
-      const outcome = result.ok ? 'notify ok' : 'notify failed';
-      log(`${outcome} uid ${wakeCtx.uid} attempts ${result.attempts}`);
-      return result.ok ? 'ok' : 'failed';
-    },
+    now,
   });
 
   const imapClient = ctx.imapFactory(account, password);
@@ -269,6 +237,25 @@ async function runAccountLoop(ctx) {
   }
 
   let connectBackoff = CONNECT_INITIAL_BACKOFF_MS;
+
+  /** @type {ReturnType<typeof createRedeliverPollWatcher> | null} */
+  let pollWatcher = null;
+
+  try {
+  pollWatcher = createRedeliverPollWatcher({
+    mailDir: account.mail_dir,
+    pollMs: REQUEST_POLL_MS,
+    sleeper,
+    stopSignal,
+    fsImpl: ctx.fs ?? fs,
+  });
+  pollWatcher.start();
+
+  if (delivery.outstandingCount() > 0) {
+    delivery.logOutstandingCount({ force: true });
+  }
+  await delivery.applyRedeliverRequests();
+  await delivery.runDueTurn();
 
   while (!stopSignal.stopped) {
     try {
@@ -291,6 +278,7 @@ async function runAccountLoop(ctx) {
         reloadHooks(),
         log,
         account.mailbox,
+        delivery,
       );
 
       if (ctx.stopAfterSync) {
@@ -301,6 +289,7 @@ async function runAccountLoop(ctx) {
         ) {
           await new Promise((resolve) => setTimeout(resolve, 20));
         }
+        stopSignal.stopped = true;
         break;
       }
 
@@ -312,15 +301,25 @@ async function runAccountLoop(ctx) {
         break;
       }
 
-      let idleEnteredAt = now();
+      let keepaliveAnchor = now();
       while (!stopSignal.stopped) {
+        let deliveryMs = delivery.msUntilDelivery();
+        if (deliveryMs === 0) {
+          await delivery.applyRedeliverRequests();
+          await delivery.runDueTurn();
+          deliveryMs = delivery.msUntilDelivery();
+        }
         const idleResult = await raceIdle(
           imapClient,
           idleKeepaliveMs,
-          idleEnteredAt,
+          keepaliveAnchor,
           now,
           sleeper,
-          stopSignal
+          stopSignal,
+          {
+            deliveryMs,
+            pollWatcher,
+          }
         );
         if (stopSignal.stopped || idleResult === 'stop') {
           if (typeof imapClient.cancelIdle === 'function') {
@@ -328,11 +327,58 @@ async function runAccountLoop(ctx) {
           }
           break;
         }
+        if (idleResult === 'poll' || idleResult === 'delivery') {
+          if (typeof imapClient.cancelIdle === 'function') {
+            imapClient.cancelIdle();
+          }
+          await delivery.applyRedeliverRequests();
+          await delivery.runDueTurn();
+          const current = store.readState();
+          if (current) {
+            const mbCheck = await imapClient.mailboxOpen(account.mailbox);
+            const uidNextCheck = coerceImapInteger(mbCheck.uidNext);
+            if (uidsToSync(current, /** @type {number} */ (uidNextCheck)).length > 0) {
+              await syncMessages(
+                imapClient,
+                store,
+                current,
+                /** @type {number} */ (uidNextCheck),
+                reloadHooks(),
+                log,
+                account.mailbox,
+                delivery,
+              );
+            }
+          }
+          continue;
+        }
         if (idleResult === 'keepalive') {
           if (typeof imapClient.cancelIdle === 'function') {
             imapClient.cancelIdle();
           }
-          idleEnteredAt = now();
+          if (delivery.outstandingCount() > 0) {
+            delivery.logOutstandingCount({ force: true });
+          }
+          await delivery.applyRedeliverRequests();
+          await delivery.runDueTurn();
+          const currentK = store.readState();
+          if (currentK) {
+            const mbK = await imapClient.mailboxOpen(account.mailbox);
+            const uidNextK = coerceImapInteger(mbK.uidNext);
+            if (uidsToSync(currentK, /** @type {number} */ (uidNextK)).length > 0) {
+              await syncMessages(
+                imapClient,
+                store,
+                currentK,
+                /** @type {number} */ (uidNextK),
+                reloadHooks(),
+                log,
+                account.mailbox,
+                delivery,
+              );
+            }
+          }
+          keepaliveAnchor = now();
           continue;
         }
         if (idleResult === 'exists') {
@@ -351,12 +397,13 @@ async function runAccountLoop(ctx) {
               reloadHooks(),
               log,
               account.mailbox,
+              delivery,
             );
           }
           if (reloadState?.pending && !renameInProgress.value) {
             break;
           }
-          idleEnteredAt = now();
+          keepaliveAnchor = now();
           continue;
         }
         break;
@@ -375,6 +422,10 @@ async function runAccountLoop(ctx) {
         /* ignore */
       }
     }
+  }
+
+  } finally {
+    pollWatcher?.stop();
   }
 
   if (openclawClient) {
@@ -403,7 +454,7 @@ async function runAccountLoop(ctx) {
  *   renameInProgress?: { value: boolean },
  * }} [reload]
  */
-async function syncMessages(client, store, state, uidNext, reload, logFn, mailbox) {
+async function syncMessages(client, store, state, uidNext, reload, logFn, mailbox, delivery) {
   let current = store.readState() ?? state;
   const uids = uidsToSync(current, uidNext);
   const encMailbox = encodeURIComponent(mailbox);
@@ -419,24 +470,48 @@ async function syncMessages(client, store, state, uidNext, reload, logFn, mailbo
       logFn(`fetch end mailbox ${encMailbox} uid ${uid}`);
     }
     if (!msg) continue;
-    await store.saveOneMessage({
-      uid,
-      uidValidity: current.uidValidity,
-      messageId: msg.messageId,
-      from: msg.from,
-      to: msg.to,
-      subject: msg.subject,
-      envelopeDate: msg.envelopeDate,
-      body: msg.body,
-      htmlBody: msg.htmlBody,
-      attachments: msg.attachments,
-      beforeWrite: () => !(reload?.shouldAbortBeforeUid?.()),
-      onRenamed: () => {
-        if (reload?.renameInProgress) reload.renameInProgress.value = true;
-      },
-    });
-    if (reload?.renameInProgress) {
-      reload.renameInProgress.value = false;
+    try {
+      const saveResult = await store.saveOneMessage({
+        uid,
+        uidValidity: current.uidValidity,
+        messageId: msg.messageId,
+        from: msg.from,
+        to: msg.to,
+        subject: msg.subject,
+        envelopeDate: msg.envelopeDate,
+        body: msg.body,
+        htmlBody: msg.htmlBody,
+        attachments: msg.attachments,
+        beforeWrite: () => !(reload?.shouldAbortBeforeUid?.()),
+        onRenamed: () => {
+          if (reload?.renameInProgress) reload.renameInProgress.value = true;
+        },
+      });
+      if (saveResult.syncAborted) {
+        throw new Error('ledger sync aborted');
+      }
+      if (saveResult.newLedgerRow && delivery) {
+        delivery.logOutstandingCount({ force: true });
+      }
+      if (
+        saveResult.attemptNotify &&
+        delivery &&
+        saveResult.path &&
+        saveResult.uid != null &&
+        saveResult.filename
+      ) {
+        await delivery.attemptAfterSave({
+          uid: saveResult.uid,
+          path: saveResult.path,
+          from: saveResult.wakeFrom,
+          subject: saveResult.wakeSubject,
+          filename: saveResult.filename,
+        });
+      }
+    } finally {
+      if (reload?.renameInProgress) {
+        reload.renameInProgress.value = false;
+      }
     }
     current = store.readState() ?? current;
   }
@@ -450,11 +525,12 @@ async function syncMessages(client, store, state, uidNext, reload, logFn, mailbo
  * @param {(ms: number) => Promise<void>} sleeper
  * @param {{ stopped: boolean }} [stopSignal]
  */
-async function raceIdle(client, idleKeepaliveMs, idleEnteredAt, now, sleeper, stopSignal) {
+async function raceIdle(client, idleKeepaliveMs, keepaliveAnchor, now, sleeper, stopSignal, extra) {
   if (stopSignal?.stopped) {
     return 'stop';
   }
-  const elapsed = now() - idleEnteredAt;
+  const raceDone = { value: false };
+  const elapsed = now() - keepaliveAnchor;
   const remaining = Math.max(0, idleKeepaliveMs - elapsed);
   const idlePromise = client.idle().then(() => 'exists');
   let stopInterval;
@@ -470,23 +546,48 @@ async function raceIdle(client, idleKeepaliveMs, idleEnteredAt, now, sleeper, st
       }
     }, 5);
   });
+  /** @type {Promise<string>[]} */
+  const timerPromises = [];
+  const never = new Promise(() => {});
+  if (remaining === 0) {
+    timerPromises.push(Promise.resolve('keepalive'));
+  } else {
+    timerPromises.push(
+      sleeper(remaining).then(() => (raceDone.value ? never : 'keepalive'))
+    );
+  }
+  if (extra?.pollWatcher) {
+    timerPromises.push(
+      extra.pollWatcher.waitForRequest().then(() => (raceDone.value ? never : 'poll'))
+    );
+  }
+  if (extra?.deliveryMs != null && extra.deliveryMs > 0) {
+    timerPromises.push(
+      sleeper(extra.deliveryMs).then(() => (raceDone.value ? never : 'delivery'))
+    );
+  }
+  /** @type {string | undefined} */
+  let result;
   try {
-    let result;
-    if (remaining === 0) {
-      result = await Promise.race([stopPromise, Promise.resolve('keepalive')]);
-    } else {
-      const timerPromise = sleeper(remaining).then(() => 'keepalive');
-      result = await Promise.race([idlePromise, timerPromise, stopPromise]);
-    }
-    if (result === 'keepalive' || result === 'stop') {
+    result = await Promise.race([idlePromise, stopPromise, ...timerPromises]);
+    if (
+      result === 'keepalive' ||
+      result === 'stop' ||
+      result === 'poll' ||
+      result === 'delivery'
+    ) {
       if (typeof client.cancelIdle === 'function') {
         await client.cancelIdle();
       }
     }
     return result;
   } finally {
+    raceDone.value = true;
     if (stopInterval) {
       clearInterval(stopInterval);
+    }
+    if (result !== 'poll' && extra?.pollWatcher?.discardPendingWaiters) {
+      extra.pollWatcher.discardPendingWaiters();
     }
   }
 }

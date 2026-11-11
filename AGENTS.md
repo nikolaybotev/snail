@@ -17,6 +17,7 @@ Squash-merge a pull request only when every required check has succeeded. Requir
 
 - For build and build-review, load and follow the installed **build-practices** skill; do not copy its text into this repo.
 - Follow `intent/portable-mail/spec.md` and `intent/portable-mail/plan.md` when building portable mail.
+- Follow `intent/durable-notify/spec.md` and `intent/durable-notify/plan.md` for notify delivery.
 - Follow `intent/config-error-restart/spec.md` and `intent/config-error-restart/plan.md` for the user-service restart contract (launchd wrapper and systemd unit).
 
 ## Architecture
@@ -43,9 +44,12 @@ Do not introduce behavior that:
 - drops the live config or exits on a rejected reload;
 - lets the launchd wrapper exit 2 when snail exits 2;
 - lets a SIGTERM child leave the wrapper with a status other than 143;
-- sets systemd `ExecStart` to anything other than `/ABS/PATH/TO/node /ABS/PATH/TO/HOME/snail/snail.js --config /ABS/PATH/TO/HOME/.config/snail/config.toml`.
+- sets systemd `ExecStart` to anything other than `/ABS/PATH/TO/node /ABS/PATH/TO/HOME/snail/snail.js --config /ABS/PATH/TO/HOME/.config/snail/config.toml`;
+- drops a pending notify because `lastUid` advanced, or deletes a pending notify without a successful notifier response;
+- logs a webhook URL, an authorization header, or a secret.
 
 ## Things agents get wrong
 
 - Treating `package.json` `"version"` as the product version — release version comes from git tags and `VERSION` at build time, not from `"0.0.0"`.
 - Setting `disableAutoIdle: true` on the imapflow client without `maxIdleTime` under the library’s 5-minute socket timeout — the account loop logs `imap disconnected: Socket timeout` about every 10 minutes while TCP stays up.
+- Treating `notify failed` as the end of delivery. The row stays in `.snail-notify.json` and retries until the notifier succeeds. `notify-redeliver` queues another attempt. Deleting the message file or rewinding `lastUid` is not the recovery.

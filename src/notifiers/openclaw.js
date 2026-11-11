@@ -40,9 +40,14 @@ function inboundGatewayMethod(method) {
  * @param {string} from
  * @param {string} subject
  * @param {string} absolutePath
+ * @param {string} [notifyId]
  */
-function formatWakeText(from, subject, absolutePath) {
-  return `New email arrived. From: ${from} | Subject: ${subject} | File: ${absolutePath}`;
+function formatWakeText(from, subject, absolutePath, notifyId) {
+  const base = `New email arrived. From: ${from} | Subject: ${subject} | File: ${absolutePath}`;
+  if (notifyId) {
+    return `${base} | Id: ${notifyId}`;
+  }
+  return base;
 }
 
 async function generateDeviceKeypair() {
@@ -296,8 +301,31 @@ class OpenClawClient {
  *   sleeper?: (ms: number) => Promise<void>,
  * }} options
  */
-async function notifyOpenClawWake({ client, from, subject, path, sleeper = defaultSleeper }) {
-  const text = formatWakeText(from, subject, path);
+/**
+ * @param {{
+ *   client: OpenClawClient,
+ *   from: string,
+ *   subject: string,
+ *   path: string,
+ *   notifyId?: string,
+ * }} options
+ */
+async function notifyOpenClawWakeOnce({ client, from, subject, path, notifyId }) {
+  const text = formatWakeText(from, subject, path, notifyId);
+  try {
+    if (!client.ready) {
+      await client.connect();
+    }
+    await client.wake(text);
+    return { ok: true, statusToken: 'wake' };
+  } catch {
+    client.close();
+    return { ok: false, statusToken: 'error' };
+  }
+}
+
+async function notifyOpenClawWake({ client, from, subject, path, notifyId, sleeper = defaultSleeper }) {
+  const text = formatWakeText(from, subject, path, notifyId);
 
   const attempt = async () => {
     try {
@@ -320,4 +348,5 @@ module.exports = {
   formatWakeText,
   buildDeviceAuthPayload,
   notifyOpenClawWake,
+  notifyOpenClawWakeOnce,
 };

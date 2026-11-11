@@ -18,11 +18,14 @@ const {
   createFakeImapClient,
   formatLogLine,
   raceIdle,
+  syncMessages,
 } = require('../src/supervisor.js');
 const { readSnailState, initialSnailState } = require('../src/mail-store.js');
 const { parseCli, assertCleanArgv, readBuildStamp } = require('../snail.js');
 const { NOTIFY_RETRY_DELAYS_MS } = require('../src/notifiers/retry.js');
 const { buildWebhookBody, WEBHOOK_ATTEMPT_TIMEOUT_MS } = require('../src/notifiers/webhook.js');
+const { REQUEST_POLL_MS } = require('../src/notify-delivery.js');
+const { NOTIFY_DELAY_MS } = require('../src/notify-ledger.js');
 
 const root = path.join(__dirname, '..');
 const snailPath = path.join(root, 'snail.js');
@@ -33,14 +36,22 @@ function tempDir(prefix) {
 
 function instantSleeper(delays) {
   return async (ms) => {
-    delays.push(ms);
+    if (ms === REQUEST_POLL_MS) {
+      return new Promise(() => {});
+    }
+    if (delays) {
+      delays.push(ms);
+    }
   };
 }
 
 function webhookFriendlySleeper(delays) {
   return async (ms) => {
-    if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS) {
+    if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS || ms === REQUEST_POLL_MS) {
       return new Promise(() => {});
+    }
+    if (NOTIFY_DELAY_MS.includes(ms) || ms === 60000) {
+      await new Promise((resolve) => setTimeout(resolve, 15));
     }
     if (delays) {
       delays.push(ms);
@@ -454,7 +465,15 @@ test('AC9: failing webhook leaves one file, advances lastUid, logs notify failed
   assert.equal(files.length, 1);
   assert.equal(readSnailState(mailDir).lastUid, 100);
   assert.ok(lines.some((l) => l.includes('notify failed') && l.includes('100')));
-  assert.equal(fetchCount, 1 + NOTIFY_RETRY_DELAYS_MS.length);
+  assert.equal(fetchCount, 1);
+  const ledger = JSON.parse(
+    fs.readFileSync(path.join(mailDir, '.snail-notify.json'), 'utf8')
+  );
+  assert.equal(ledger.items.length, 1);
+  assert.match(
+    lines.find((l) => l.includes('notify failed') && l.includes('100')),
+      /status 500/
+  );
 
   const secondPass = createFakeImapClient({
     uidNext: 101,
@@ -482,6 +501,126 @@ test('AC16: failed imap connects use FR6 backoff per account', async () => {
     backoff = Math.min(backoff * 2, 60000);
   }
   assert.deepEqual(delays, [5000, 10000, 20000, 40000, 60000]);
+});
+
+test('ledger sync abort clears rename guard for pending reload', async () => {
+  const mailDir = tempDir('snail-sync-abort-');
+  const { createMailStore } = require('../src/mail-store.js');
+  const plainStore = createMailStore({
+    mailDir,
+    textLimit: 10000,
+    htmlLimit: 100000,
+    attachmentLimit: 10485760,
+    accountName: 'work',
+  });
+  const state = plainStore.ensureMailboxState(1, 101);
+  let blockLedger = false;
+  const failFs = {
+    ...fs,
+    writeFileSync(file, data, opts) {
+      if (blockLedger && String(file).includes('.snail-notify')) {
+        const err = new Error('ENOSPC');
+        err.code = 'ENOSPC';
+        throw err;
+      }
+      return fs.writeFileSync(file, data, opts);
+    },
+    readFileSync: fs.readFileSync.bind(fs),
+    existsSync: fs.existsSync.bind(fs),
+    mkdirSync: fs.mkdirSync.bind(fs),
+    renameSync: fs.renameSync.bind(fs),
+    readdirSync: fs.readdirSync.bind(fs),
+    unlinkSync: fs.unlinkSync.bind(fs),
+  };
+  const store = createMailStore({
+    mailDir,
+    textLimit: 10000,
+    htmlLimit: 100000,
+    attachmentLimit: 10485760,
+    accountName: 'work',
+    fs: failFs,
+  });
+  const reloadState = { pending: null };
+  const renameInProgress = { value: false };
+  const reload = {
+    shouldAbortBeforeUid: () => {
+      if (reloadState.pending && renameInProgress.value) {
+        return false;
+      }
+      return !!reloadState.pending;
+    },
+    renameInProgress,
+  };
+  const client = createFakeImapClient({
+    uidValidity: 1,
+    uidNext: 102,
+    messages: {
+      101: { body: 'body', from: [{ address: 'a@example.com' }], subject: 'S' },
+    },
+  });
+  blockLedger = true;
+  await assert.rejects(
+    () =>
+      syncMessages(client, store, state, 102, reload, null, 'INBOX', null),
+    /ledger sync aborted/
+  );
+  assert.equal(renameInProgress.value, false);
+  reloadState.pending = { kind: 'remove' };
+  assert.equal(reload.shouldAbortBeforeUid(), true);
+});
+
+test('FR10: runAccountLoop reconnect sleeps double through 20000', async () => {
+  const delays = [];
+  let connectCalls = 0;
+  const failImap = {
+    id: 'fail-imap',
+    setLog() {},
+    async connect() {
+      connectCalls += 1;
+      throw new Error('Command failed');
+    },
+    async mailboxOpen() {
+      return { uidValidity: 1, uidNext: 1 };
+    },
+    async fetchOne() {
+      return null;
+    },
+    async idle() {
+      await new Promise(() => {});
+    },
+    async cancelIdle() {},
+    async logout() {},
+  };
+  const stopSignal = { stopped: false };
+  const sleeper = async (ms) => {
+    if (ms === REQUEST_POLL_MS) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return;
+    }
+    delays.push(ms);
+    if (ms >= 5000) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+  };
+
+  const loop = runAccountLoop({
+    account: baseAccount(),
+    secrets: inlineResolver(),
+    imapFactory: () => failImap,
+    log: () => {},
+    stopSignal,
+    sleeper,
+  });
+
+  await waitFor(
+    () => delays.filter((d) => d === 5000 || d === 10000 || d === 20000).length >= 3,
+    10000,
+  );
+  await stopLoops(stopSignal, loop);
+
+  const reconnect = delays.filter((d) => d === 5000 || d === 10000 || d === 20000);
+  assert.deepEqual(reconnect.slice(0, 3), [5000, 10000, 20000]);
+  assert.ok(connectCalls >= 3);
 });
 
 test('AC17: full disk on one account leaves checkpoint; other account still saves', async () => {
@@ -684,6 +823,106 @@ test('build --version lines match build stamp', () => {
   }
 });
 
+test('AC5: pending webhook on one account does not block another', async () => {
+  const mailA = tempDir('snail-dn-ac5a-');
+  const mailB = tempDir('snail-dn-ac5b-');
+  for (const [dir, last] of [
+    [mailA, 99],
+    [mailB, 100],
+  ]) {
+    fs.writeFileSync(
+      path.join(dir, '.snail-state.json'),
+      JSON.stringify({
+        uidValidity: 1,
+        notifyBoundary: 100,
+        backlogUid: 0,
+        lastUid: last,
+      }),
+      { mode: 0o600 }
+    );
+  }
+  const { upsertNotifyItem, isoFromMs } = require('../src/notify-ledger.js');
+  upsertNotifyItem(mailA, {
+    notify_id: 'work/1/100',
+    account: 'work',
+    uid: 100,
+    uid_validity: 1,
+    file: 'a.json',
+    attempts: 0,
+    last_status: 'none',
+    next_attempt_at: isoFromMs(0),
+    request_id: 'req-a',
+  });
+  fs.writeFileSync(path.join(mailA, 'a.json'), JSON.stringify({ from: 'a@x.com', subject: 'A' }), {
+    mode: 0o600,
+  });
+
+  /** @type {(() => void) | undefined} */
+  let releaseWebhookA;
+  /** @type {(() => void) | undefined} */
+  let releasePollA;
+  const delaysB = [];
+  const sleeperA = async (ms) => {
+    if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS) {
+      await new Promise((resolve) => {
+        releaseWebhookA = resolve;
+      });
+    }
+    if (ms === REQUEST_POLL_MS) {
+      await new Promise((resolve) => {
+        releasePollA = resolve;
+      });
+    }
+  };
+  const stopA = { stopped: false };
+  const stopB = { stopped: false };
+  let postsB = 0;
+  const loopA = runAccountLoop({
+    account: baseAccount({ name: 'alpha', mail_dir: mailA }),
+    secrets: inlineResolver(),
+    imapFactory: () => createFakeImapClient({ uidNext: 101, uidValidity: 1 }),
+    log: () => {},
+    fetchImpl: () => new Promise(() => {}),
+    sleeper: sleeperA,
+    stopSignal: stopA,
+    stopAfterSync: true,
+  });
+  const loopB = runAccountLoop({
+    account: baseAccount({ name: 'beta', mail_dir: mailB }),
+    secrets: inlineResolver(),
+    imapFactory: () =>
+      createFakeImapClient({
+        uidNext: 102,
+        uidValidity: 1,
+        messages: {
+          101: {
+            body: 'body',
+            subject: 'B',
+            from: [{ address: 'b@example.com' }],
+          },
+        },
+      }),
+    log: () => {},
+    fetchImpl: async () => {
+      postsB += 1;
+      return new Response(null, { status: 204 });
+    },
+    sleeper: webhookFriendlySleeper(delaysB),
+    stopSignal: stopB,
+    stopAfterSync: true,
+  });
+  try {
+    await waitFor(() => releaseWebhookA !== undefined, 5000);
+    await waitFor(() => postsB >= 1, 5000);
+    assert.ok(!delaysB.includes(WEBHOOK_ATTEMPT_TIMEOUT_MS));
+  } finally {
+    releaseWebhookA?.();
+    releasePollA?.();
+    await stopLoops(stopA, loopA);
+    await stopLoops(stopB, loopB);
+  }
+});
+
 test('formatLogLine uses UTC prefix and account tag', () => {
   const line = formatLogLine('work', 'hello', []);
   assert.match(line, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z \[snail\] \[work\] hello$/);
@@ -700,6 +939,7 @@ test('webhook payload builder still omits forbidden keys in supervisor path', ()
     mailbox: 'INBOX',
     uid: 1,
     uid_validity: 1,
+    notify_id: 'work/1/1',
   });
-  assert.equal(Object.keys(body).length, 9);
+  assert.equal(Object.keys(body).length, 10);
 });

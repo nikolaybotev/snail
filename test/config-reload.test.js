@@ -15,8 +15,17 @@ const {
 const { parseSnailConfig, loadSnailConfig } = require('../src/config.js');
 const { startConfigWatch } = require('../src/config-watch.js');
 const { startSupervisor, createFakeImapClient } = require('../src/supervisor.js');
+const { REQUEST_POLL_MS } = require('../src/notify-delivery.js');
 
 const serial = { concurrency: 1 };
+
+function configReloadSleeper() {
+  return async (ms) => {
+    if (ms === REQUEST_POLL_MS) {
+      return new Promise(() => {});
+    }
+  };
+}
 
 function tempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -144,7 +153,7 @@ test('AC11: comment-only save does not reconnect', serial, async () => {
     enableReload: false,
     stopAfterSync: true,
     log: (line) => logs.push(line),
-    sleeper: async () => {},
+    sleeper: configReloadSleeper(),
     imapFactory: (acct) => (acct.name === 'alpha' ? imapA : imapB),
     secretResolverFactory: () => inlineResolver(),
   });
@@ -171,7 +180,7 @@ test('AC11: adding account starts only the new loop', serial, async () => {
     enableReload: false,
     stopAfterSync: true,
     log: () => {},
-    sleeper: async () => {},
+    sleeper: configReloadSleeper(),
     imapFactory: (acct) => (acct.name === 'solo' ? imapSolo : imapNew),
     secretResolverFactory: () => inlineResolver(),
   });
@@ -199,7 +208,7 @@ test('AC11: changed secret string restarts only that account', serial, async () 
     enableReload: false,
     stopAfterSync: true,
     log: () => {},
-    sleeper: async () => {},
+    sleeper: configReloadSleeper(),
     imapFactory: (acct) => {
       if (acct.name === 'alpha') {
         alphaClient = createFakeImapClient({ id: `alpha-${++alphaGen}`, uidNext: 2 });
@@ -235,7 +244,7 @@ test('config reloaded is logged before other account reconnects', serial, async 
     enableReload: false,
     stopAfterSync: true,
     log: (line) => logs.push(line),
-    sleeper: async () => {},
+    sleeper: configReloadSleeper(),
     imapFactory: (acct) => {
       factoryCalls[acct.name] += 1;
       return createFakeImapClient({ id: `${acct.name}-${factoryCalls[acct.name]}`, uidNext: 2 });
@@ -247,11 +256,23 @@ test('config reloaded is logged before other account reconnects', serial, async 
     `${accountBlock('alpha', mailA, 'rotated')}${accountBlock('beta', mailB)}`,
     { mode: 0o600 }
   );
-  sup.reloadNow();
-  await waitFor(() => logs.some((l) => l.includes('config reloaded')), 2000);
-  assert.equal(factoryCalls.beta, 1);
-  await waitFor(() => factoryCalls.alpha >= 2, 2000);
-  await sup.stopAndWait();
+  try {
+    sup.reloadNow();
+    await waitFor(() => logs.some((l) => l.includes('config reloaded')), 2000);
+    await waitFor(() => factoryCalls.beta >= 1, 5000);
+    await waitFor(() => factoryCalls.alpha >= 2, 5000);
+    assert.equal(factoryCalls.beta, 1);
+    const reloadedIdx = logs.findIndex((l) => l.includes('config reloaded'));
+    const betaReconnectIdx = logs.findIndex(
+      (l, i) => i > reloadedIdx && l.includes('[beta]') && l.includes('starting')
+    );
+    assert.ok(reloadedIdx >= 0);
+    if (betaReconnectIdx >= 0) {
+      assert.ok(reloadedIdx < betaReconnectIdx);
+    }
+  } finally {
+    await sup.stopAndWait();
+  }
 });
 
 test('AC11: removing one account does not logout the other', serial, async () => {
@@ -268,7 +289,7 @@ test('AC11: removing one account does not logout the other', serial, async () =>
     enableReload: false,
     stopAfterSync: true,
     log: () => {},
-    sleeper: async () => {},
+    sleeper: configReloadSleeper(),
     imapFactory: (acct) => (acct.name === 'alpha' ? imapAlpha : imapBeta),
     secretResolverFactory: () => inlineResolver(),
   });
@@ -307,7 +328,7 @@ test('supervisor reload applies a watch-driven config write', serial, async () =
     configPath: file,
     stopAfterSync: true,
     log: (line) => logs.push(line),
-    sleeper: async () => {},
+    sleeper: configReloadSleeper(),
     imapFactory: () => createFakeImapClient({ id: 'solo', uidNext: 2 }),
     secretResolverFactory: () => inlineResolver(),
   });
@@ -366,7 +387,7 @@ test('hung logout on removed account does not block other save', serial, async (
     enableReload: false,
     stopAfterSync: true,
     log: () => {},
-    sleeper: async () => {},
+    sleeper: configReloadSleeper(),
     imapFactory: (acct) => (acct.name === 'alpha' ? imapAlpha : imapBeta),
     secretResolverFactory: () => inlineResolver(),
     fetchImpl,

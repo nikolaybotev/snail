@@ -22,7 +22,7 @@ test('node --check snail.js', () => {
 });
 
 test('build.sh without VERSION exits non-zero when no git tag describes HEAD', () => {
-  const r = runBuild({ VERSION: '' });
+  const r = runBuild({ VERSION: '', GIT_DIR: path.join(root, 'dist') });
   assert.notEqual(r.status, 0, r.stderr || r.stdout);
 });
 

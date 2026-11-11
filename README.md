@@ -118,6 +118,20 @@ Secret fields are `password`, `webhook_secret`, and `openclaw_token`. Each may b
 
 References resolve once when an account starts (or restarts after reload). Reconnects and notify retries use the in-memory cache only — Snail does not call `security` or `op` on every IMAP or webhook attempt.
 
+## Notify delivery
+
+Mail intake is exactly-once. `.snail-state.json` records what has been fetched and saved. A message file is written once.
+
+Notify delivery is at-least-once. Snail is the sender. A saved message that should be woken stays in `.snail-notify.json` until the notifier succeeds. Moving `lastUid` does not drop that notify. A restart keeps retrying with backoff. Duplicate notifies are expected.
+
+The recipient is what makes processing exactly-once. It stores each `notify_id` it has already processed. `notify_id` is `{account}/{uid_validity}/{uid}` on the webhook body and in the wake text.
+
+Search the log for `notify failed` and `notify outstanding count`. Those lines name the account, the uid, and a status token. They do not include a webhook URL, a header, or a secret.
+
+`snail notify-list --config /absolute/path/to/config.toml` prints outstanding notifies. Exit 0 means none. Exit 1 means one or more.
+
+`snail notify-redeliver --config /absolute/path/to/config.toml --account ACCOUNT --uid UID` or `--file FILE` queues another attempt. It does not rewind `lastUid` and it does not delete the message file.
+
 ### macOS Keychain
 
 Add an item so the secret is typed at a prompt (`-w` last, with **no** value on the command line):

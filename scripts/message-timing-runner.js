@@ -182,6 +182,7 @@ async function runMainFlow() {
     const { createImapFlowClient } = require('../snail.js');
     const { runAccountLoop, IDLE_KEEPALIVE_MS } = require('../src/supervisor.js');
     const { WEBHOOK_ATTEMPT_TIMEOUT_MS } = require('../src/notifiers/webhook.js');
+    const { REQUEST_POLL_MS } = require('../src/notify-delivery.js');
 
     const mailDir = tempDir('snail-msg-timing-');
     fs.writeFileSync(
@@ -194,14 +195,7 @@ async function runMainFlow() {
       }),
       { mode: 0o600 },
     );
-    fs.writeFileSync(
-      path.join(mailDir, '20260101T120000Z_1_0000000103.json'),
-      JSON.stringify({ uid: 103, uid_validity: 1 }),
-      { mode: 0o600 },
-    );
-
     mock.messages.set(101, tokenMessage());
-    mock.messages.set(104, tokenMessage());
 
     const account = {
       name: 'work',
@@ -238,7 +232,7 @@ async function runMainFlow() {
       },
       stopSignal,
       sleeper: async (ms) => {
-        if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS || ms >= IDLE_KEEPALIVE_MS) {
+        if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS || ms === REQUEST_POLL_MS || ms >= IDLE_KEEPALIVE_MS) {
           return new Promise(() => {});
         }
       },
@@ -258,20 +252,35 @@ async function runMainFlow() {
     ]);
     assert.equal(indexOfLine(mock.sequence, 'file write mailbox INBOX uid 102'), -1);
     assert.equal(indexOfLine(mock.sequence, 'file write mailbox INBOX uid 103'), -1);
-    assert.ok(!mock.sequence.some((l) => l.startsWith('webhook start')), 'uid 101 must not webhook');
+    await waitFor(() => indexOfLine(mock.sequence, 'fetch end mailbox INBOX uid 103') >= 0, 10000);
+    for (let i = 0; i < 20; i += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.ok(
+      !mock.sequence.some((l) => l.startsWith('webhook start') && l.includes('uid 101')),
+      'uid 101 must not webhook',
+    );
+    assert.ok(
+      !mock.sequence.some((l) => l.startsWith('webhook start')),
+      'no webhook before EXISTS',
+    );
 
     const beforeExistsLen = mock.sequence.length;
+    mock.messages.set(104, tokenMessage());
     mock.liveImap.emit('exists', { path: 'INBOX', count: 3, prevCount: 2 });
 
-    await waitFor(() => mock.notifyCalls >= 1);
-
-    const afterExists = mock.sequence.slice(beforeExistsLen);
     const existsLine = 'exists mailbox INBOX path INBOX count 3 prevCount 2';
-    assert.equal(afterExists[0], existsLine);
-    assert.ok(!/\buid\b/.test(existsLine));
-    const openIdx = afterExists.findIndex((l) => l.startsWith('__mailboxOpen_2__'));
-    assert.ok(openIdx > 0, 'second mailboxOpen after exists line');
+    await waitFor(() => mock.sequence.includes(existsLine), 15000);
 
+    assert.ok(!/\buid\b/.test(existsLine));
+    await waitFor(() => {
+      const existsIdx = mock.sequence.indexOf(existsLine);
+      if (existsIdx < 0) return false;
+      return mock.sequence
+        .slice(existsIdx + 1)
+        .some((l) => /^__mailboxOpen_\d+__$/.test(l));
+    }, 15000);
+    await waitFor(() => mock.notifyCalls >= 1, 15000);
     const tail = mock.sequence.slice(beforeExistsLen);
     assertOrderedSubsequence(tail, [
       existsLine,
@@ -324,6 +333,7 @@ async function runSpacesMailbox() {
     const { createImapFlowClient } = require('../snail.js');
     const { runAccountLoop, IDLE_KEEPALIVE_MS } = require('../src/supervisor.js');
     const { WEBHOOK_ATTEMPT_TIMEOUT_MS } = require('../src/notifiers/webhook.js');
+    const { REQUEST_POLL_MS } = require('../src/notify-delivery.js');
 
     const mailDir = tempDir('snail-msg-timing-sp-');
     fs.writeFileSync(
@@ -370,7 +380,7 @@ async function runSpacesMailbox() {
       fetchImpl: async () => new Response(null, { status: 204 }),
       stopSignal,
       sleeper: async (ms) => {
-        if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS || ms >= IDLE_KEEPALIVE_MS) {
+        if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS || ms === REQUEST_POLL_MS || ms >= IDLE_KEEPALIVE_MS) {
           return new Promise(() => {});
         }
       },
@@ -402,6 +412,7 @@ async function runArchivePath() {
     const { createImapFlowClient } = require('../snail.js');
     const { runAccountLoop, IDLE_KEEPALIVE_MS } = require('../src/supervisor.js');
     const { WEBHOOK_ATTEMPT_TIMEOUT_MS } = require('../src/notifiers/webhook.js');
+    const { REQUEST_POLL_MS } = require('../src/notify-delivery.js');
 
     const mailDir = tempDir('snail-msg-timing-ar-');
     fs.writeFileSync(
@@ -448,7 +459,7 @@ async function runArchivePath() {
       fetchImpl: async () => new Response(null, { status: 204 }),
       stopSignal,
       sleeper: async (ms) => {
-        if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS || ms >= IDLE_KEEPALIVE_MS) {
+        if (ms === WEBHOOK_ATTEMPT_TIMEOUT_MS || ms === REQUEST_POLL_MS || ms >= IDLE_KEEPALIVE_MS) {
           return new Promise(() => {});
         }
       },
@@ -467,14 +478,18 @@ async function runArchivePath() {
   }
 }
 
-(async () => {
+async function runAllFlows() {
   await runMainFlow();
   await runSpacesMailbox();
   await runArchivePath();
-})().then(
-  () => process.exit(0),
-  (err) => {
-    console.error(err);
-    process.exit(1);
-  },
-);
+}
+
+if (require.main === module) {
+  runAllFlows().then(
+    () => process.exit(0),
+    (err) => {
+      console.error(err);
+      process.exit(1);
+    },
+  );
+}
