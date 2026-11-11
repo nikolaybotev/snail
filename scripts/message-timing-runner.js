@@ -489,9 +489,4 @@ if (require.main === module) {
       process.exit(1);
     },
   );
-} else {
-  const { test } = require('node:test');
-  test('message timing flows', { concurrency: 1 }, async () => {
-    await runAllFlows();
-  });
 }

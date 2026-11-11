@@ -16,7 +16,7 @@ const { NOTIFY_RETRY_DELAYS_MS } = require('../src/notifiers/retry.js');
 const root = path.join(__dirname, '..');
 
 test('message timing integration runner', () => {
-  const runner = path.join(__dirname, 'message-timing-runner.js');
+  const runner = path.join(__dirname, '..', 'scripts', 'message-timing-runner.js');
   const r = spawnSync(process.execPath, [runner], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr || r.stdout || `runner exited ${r.status}`);
 });
