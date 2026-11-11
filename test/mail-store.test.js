@@ -126,7 +126,9 @@ test('AC6: uidValidity change keeps ledger row; resync save adds no row', async 
   });
   assert.equal(resync.attemptNotify, false);
   assert.equal(resync.saved, true);
+  assert.equal(resync.state.backlogUid, 10);
   const state = readSnailState(mailDir);
+  assert.equal(state.backlogUid, 10);
   assert.equal(state.uidValidity, 2);
   assert.equal(state.notifyBoundary, 60);
   assert.equal(state.lastUid, afterUvChange.lastUid);
