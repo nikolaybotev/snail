@@ -199,6 +199,35 @@ function firstBareAddress(addrs) {
 }
 
 /**
+ * @param {string | unknown} fromField stored `from` on a message file
+ * @returns {string}
+ */
+function bareFromStoredField(fromField) {
+  if (typeof fromField !== 'string' || fromField.length === 0) return 'unknown';
+  const m = /<([^>]+)>/.exec(fromField);
+  if (m) return m[1];
+  if (fromField.includes('@')) return fromField.trim();
+  return 'unknown';
+}
+
+/**
+ * @param {string} filePath
+ * @param {typeof fs} [fsImpl]
+ */
+function readWakeFieldsFromMessageFile(filePath, fsImpl = fs) {
+  try {
+    const record = JSON.parse(fsImpl.readFileSync(filePath, 'utf8'));
+    const wakeSubject =
+      typeof record.subject === 'string' && record.subject.length > 0
+        ? record.subject
+        : '(no subject)';
+    return { wakeFrom: bareFromStoredField(record.from), wakeSubject };
+  } catch {
+    return { wakeFrom: 'unknown', wakeSubject: '(no subject)' };
+  }
+}
+
+/**
  * @param {{
  *   uid: number,
  *   uidValidity: number,
@@ -398,8 +427,7 @@ function createMailStore(options) {
         msg.uid >= state.notifyBoundary &&
         msg.uidValidity === state.uidValidity
       ) {
-        const wakeFrom = 'unknown';
-        const wakeSubject = '(no subject)';
+        const { wakeFrom, wakeSubject } = readWakeFieldsFromMessageFile(existingPath, fsImpl);
         const prepared = prepareLedgerRow(
           msg.uid,
           msg.uidValidity,

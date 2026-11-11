@@ -216,6 +216,49 @@ test('AC5: existing file is not rewritten when envelope date would differ', asyn
   assert.equal(again.attemptNotify, false);
 });
 
+test('FR3 recovery: existing file notify uses from and subject on disk', async () => {
+  const mailDir = tempMailDir();
+  const store = createMailStore({
+    mailDir,
+    textLimit: 10000,
+    htmlLimit: 100000,
+    attachmentLimit: 10485760,
+    accountName: 'work',
+  });
+  store.ensureMailboxState(7, 10);
+  const first = await store.saveOneMessage({
+    uid: 10,
+    uidValidity: 7,
+    body: 'body',
+    subject: 'Recovery subject',
+    from: [{ address: 'sender@example.com', name: 'Ada' }],
+  });
+  assert.equal(first.saved, true);
+  assert.equal(first.attemptNotify, true);
+  const filePath = path.join(mailDir, first.filename);
+  const ledgerPath = path.join(mailDir, '.snail-notify.json');
+  fs.unlinkSync(ledgerPath);
+  const intake = readSnailState(mailDir);
+  const { writeSnailState } = require('../src/mail-store.js');
+  writeSnailState(mailDir, { ...intake, lastUid: 9 });
+
+  const recovered = await store.saveOneMessage({
+    uid: 10,
+    uidValidity: 7,
+    body: 'ignored',
+    subject: 'ignored',
+    from: [{ address: 'wrong@example.com' }],
+  });
+  assert.equal(recovered.skipped, true);
+  assert.equal(recovered.attemptNotify, true);
+  assert.equal(recovered.wakeFrom, 'sender@example.com');
+  assert.equal(recovered.wakeSubject, 'Recovery subject');
+  assert.equal(readSnailState(mailDir).lastUid, 10);
+  const onDisk = fs.readFileSync(filePath, 'utf8');
+  assert.ok(onDisk.includes('Recovery subject'));
+  assert.ok(onDisk.includes('sender@example.com'));
+});
+
 test('AC5: backlog UID is not woken; new UID woken once then lastUid updated', async () => {
   const mailDir = tempMailDir();
   const store = createMailStore({
