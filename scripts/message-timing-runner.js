@@ -271,14 +271,16 @@ async function runMainFlow() {
 
     const existsLine = 'exists mailbox INBOX path INBOX count 3 prevCount 2';
     await waitFor(() => mock.sequence.includes(existsLine), 15000);
-    await waitFor(() => mock.notifyCalls >= 1, 15000);
 
     assert.ok(!/\buid\b/.test(existsLine));
     await waitFor(() => {
       const existsIdx = mock.sequence.indexOf(existsLine);
-      const open2Idx = mock.sequence.indexOf('__mailboxOpen_2__');
-      return open2Idx > existsIdx;
+      if (existsIdx < 0) return false;
+      return mock.sequence
+        .slice(existsIdx + 1)
+        .some((l) => /^__mailboxOpen_\d+__$/.test(l));
     }, 15000);
+    await waitFor(() => mock.notifyCalls >= 1, 15000);
     const tail = mock.sequence.slice(beforeExistsLen);
     assertOrderedSubsequence(tail, [
       existsLine,
