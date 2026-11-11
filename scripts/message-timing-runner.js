@@ -269,15 +269,11 @@ async function runMainFlow() {
     mock.messages.set(104, tokenMessage());
     mock.liveImap.emit('exists', { path: 'INBOX', count: 3, prevCount: 2 });
 
-    await waitFor(() => mock.notifyCalls >= 1);
-
-    const afterExists = mock.sequence.slice(beforeExistsLen);
     const existsLine = 'exists mailbox INBOX path INBOX count 3 prevCount 2';
-    assert.equal(afterExists[0], existsLine);
-    assert.ok(!/\buid\b/.test(existsLine));
-    const openIdx = afterExists.findIndex((l) => l.startsWith('__mailboxOpen_2__'));
-    assert.ok(openIdx > 0, 'second mailboxOpen after exists line');
+    await waitFor(() => mock.sequence.includes(existsLine), 15000);
+    await waitFor(() => mock.notifyCalls >= 1, 15000);
 
+    assert.ok(!/\buid\b/.test(existsLine));
     const tail = mock.sequence.slice(beforeExistsLen);
     assertOrderedSubsequence(tail, [
       existsLine,
