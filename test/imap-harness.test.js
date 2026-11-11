@@ -241,12 +241,29 @@ function inlineSecretResolver() {
  * @param {object} config
  * @param {(line: string) => void} [onLog]
  */
+/**
+ * @param {ReturnType<typeof createHarnessSleeper>} fr14
+ * @returns {() => number}
+ */
+function bindHarnessFakeNow(fr14) {
+  let nowMs = 1_000_000;
+  const inner = fr14.sleeper;
+  fr14.sleeper = async (ms) => {
+    await inner(ms);
+    if (NOTIFY_DELAY_MS.includes(ms)) {
+      nowMs += ms;
+    }
+  };
+  return () => nowMs;
+}
+
 async function runHarnessSupervisor(
   fr14,
   config,
   onLog = () => {},
   fetchImpl,
   imapFactory = createImapFlowClient,
+  harnessOpts = {},
 ) {
   const sup = await startSupervisor({
     config,
@@ -255,6 +272,7 @@ async function runHarnessSupervisor(
     imapFactory,
     secretResolverFactory: inlineSecretResolver,
     fetchImpl,
+    now: harnessOpts.now,
   });
   return sup;
 }
@@ -556,6 +574,7 @@ test('AC6: webhook 500 retries leave one file, ledger row, and advance lastUid',
   const errImap = await startHarnessServer();
   const errDir = tempDir('snail-h-wh-500-');
   const errFr14 = createHarnessSleeper({ resolveWebhookAttempt: true });
+  const harnessNow = bindHarnessFakeNow(errFr14);
   let fetchCount = 0;
   const fetchImpl = async () => {
     fetchCount += 1;
@@ -572,6 +591,8 @@ test('AC6: webhook 500 retries leave one file, ledger row, and advance lastUid',
     },
     (line) => lines.push(line),
     fetchImpl,
+    createImapFlowClient,
+    { now: harnessNow },
   );
   try {
     await waitFor(() => errImap.control.sessions().some((s) => s.state === 'Selected'));
