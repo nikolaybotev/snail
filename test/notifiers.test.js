@@ -216,8 +216,10 @@ test('AC8: OpenClaw handshake and wake on fake gateway', async () => {
 
   assert.equal(connections, 1);
   assert.ok(connectParams);
+  assert.ok(connectParams.minProtocol <= 4);
+  assert.ok(connectParams.maxProtocol >= 4);
   assert.equal(connectParams.minProtocol, 3);
-  assert.equal(connectParams.maxProtocol, 3);
+  assert.equal(connectParams.maxProtocol, 4);
   assert.equal(connectParams.client.id, 'cli');
   assert.match(connectParams.device.signature, /^[A-Za-z0-9+/=]+$/);
   const payloadCheck = buildDeviceAuthPayload({
