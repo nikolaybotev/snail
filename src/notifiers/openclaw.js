@@ -171,7 +171,7 @@ class OpenClawClient {
               method: 'connect',
               params: {
                 minProtocol: 3,
-                maxProtocol: 3,
+                maxProtocol: 4,
                 client: { id: 'cli', version: '1.0.0', platform: 'linux', mode: 'cli' },
                 role,
                 scopes,
